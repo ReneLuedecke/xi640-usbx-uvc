@@ -1,0 +1,17 @@
+﻿# modules/usbx_zephyr_port/Kconfig
+
+config USBX_ZEPHYR_PORT
+    bool "USBX Zephyr OS Abstraction Layer"
+    depends on USBX
+    help
+      Maps USBX OS primitives (threads, semaphores, mutexes, timers)
+      to Zephyr kernel APIs.
+      Requires: CONFIG_USB_DEVICE_STACK=n (USBX owns the controller)
+
+config USBX_HEAP_SIZE
+    int "USBX Static Heap Size (bytes)"
+    depends on USBX_ZEPHYR_PORT
+    default 65536
+    help
+      Static memory pool for USBX internal allocations.
+      For UVC ISO 640x480: minimum 65536 recommended.

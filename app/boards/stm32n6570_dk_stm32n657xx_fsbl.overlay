@@ -1,0 +1,4 @@
+﻿/* FSBL overlay — nur UART Console */
+&usart1 {
+    status = "okay";
+};

@@ -1,0 +1,28 @@
+﻿/*
+ * Xi640 Project 22 — app.overlay
+ * STM32N6570-DK
+ */
+
+/*
+ * USB OTG HS — Hardware bleibt aktiv (USBX benutzt es direkt)
+ * Zephyr USB Stack ist deaktiviert (prj.conf)
+ * USBX initialisiert den Controller selbst via ux_dcd_stm32.c
+ */
+&zephyr_udc0 {
+    /* USBX owns this controller — no Zephyr USB stack attached */
+    status = "okay";
+};
+
+/*
+ * PSRAM APS256XXN — bewaehrte Konfiguration aus Project 21
+ * 100 MHz, ~202 MB/s read, ~109 MB/s write
+ */
+&aps256xxn_obr {
+    max-frequency = <DT_FREQ_M(100)>;
+    read-latency  = <4>;
+    write-latency = <1>;
+    fixed-latency;
+    burst-length  = <3>;
+    rbx;
+    st,csbound    = <11>;
+};

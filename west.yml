@@ -1,0 +1,31 @@
+﻿manifest:
+  version: "0.13"
+
+  defaults:
+    remote: zephyr
+
+  remotes:
+    - name: zephyr
+      url-base: https://github.com/zephyrproject-rtos
+
+  projects:
+    - name: zephyr
+      remote: zephyr
+      revision: v4.1.0
+      import: true
+
+  self:
+    path: app
+    west-commands: scripts/west-commands.yml
+
+# ---------------------------------------------------------------------------
+# st_usbx: STM32CubeN6 USBX Middleware (Vendor Snapshot)
+# Quelle:  https://github.com/STMicroelectronics/STM32CubeN6
+# Commit:  TODO — nach erstem west update pinnen: git -C modules/st_usbx log --oneline -1
+# ---------------------------------------------------------------------------
+# Temporaer auskommentiert bis Commit SHA bekannt:
+#  - name: st_usbx
+#    url: https://github.com/STMicroelectronics/STM32CubeN6
+#    revision: <COMMIT_SHA_HIER_EINSETZEN>
+#    path: modules/st_usbx
+#    import: false

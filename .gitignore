@@ -1,0 +1,29 @@
+﻿# Zephyr / West Build Artifacts
+build/
+.west/
+*.pyc
+__pycache__/
+
+# VS Code
+.vscode/settings.json
+.vscode/launch.json
+*.code-workspace
+
+# Compiler Output
+*.o
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+
+# Logs
+*.log
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Vendor — nicht einchecken (west update holt es)
+modules/st_usbx/
+# modules/usbx_zephyr_port/ — eigener Code, wird eingecheckt
