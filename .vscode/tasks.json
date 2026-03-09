@@ -1,0 +1,202 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "West Build",
+            "type": "shell",
+            "command": "west",
+            "args": [
+                "build",
+                "-b", "stm32n6570_dk//fsbl",
+                "-d", "${workspaceFolder}/build/primary",
+                "-p", "auto",
+                "${workspaceFolder}/app"
+            ],
+            "options": {
+                "cwd": "${config:zephyr.west.workspace}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "West Rebuild (Pristine)",
+            "type": "shell",
+            "command": "west",
+            "args": [
+                "build",
+                "-b", "stm32n6570_dk//fsbl",
+                "-d", "${workspaceFolder}/build/primary",
+                "-p", "always",
+                "${workspaceFolder}/app"
+            ],
+            "options": {
+                "cwd": "${config:zephyr.west.workspace}"
+            },
+            "group": "build",
+            "problemMatcher": ["$gcc"],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "West Flash",
+            "type": "shell",
+            "command": "west",
+            "args": [
+                "flash",
+                "--build-dir", "${workspaceFolder}/build/primary"
+            ],
+            "options": {
+                "cwd": "${config:zephyr.west.workspace}"
+            },
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "West Debug Server",
+            "type": "shell",
+            "command": "west",
+            "args": [
+                "debugserver",
+                "--build-dir", "${workspaceFolder}/build/primary"
+            ],
+            "options": {
+                "cwd": "${config:zephyr.west.workspace}"
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^$"
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "Starting server",
+                    "endsPattern": "Waiting for debugger connection..."
+                }
+            }
+        },
+        {
+            "label": "Menuconfig",
+            "type": "shell",
+            "command": "west",
+            "args": [
+                "build",
+                "-t", "menuconfig",
+                "-d", "${workspaceFolder}/build/primary"
+            ],
+            "options": {
+                "cwd": "${config:zephyr.west.workspace}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "RAM Report",
+            "type": "shell",
+            "command": "west",
+            "args": [
+                "build",
+                "-t", "ram_report",
+                "-d", "${workspaceFolder}/build/primary"
+            ],
+            "options": {
+                "cwd": "${config:zephyr.west.workspace}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "ROM Report",
+            "type": "shell",
+            "command": "west",
+            "args": [
+                "build",
+                "-t", "rom_report",
+                "-d", "${workspaceFolder}/build/primary"
+            ],
+            "options": {
+                "cwd": "${config:zephyr.west.workspace}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "Clean Build Directory",
+            "type": "shell",
+            "command": "Remove-Item",
+            "args": [
+                "-Recurse", "-Force",
+                "-ErrorAction", "SilentlyContinue",
+                "${workspaceFolder}/build"
+            ],
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe",
+                    "args": ["-NoProfile", "-Command"]
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "Check Config",
+            "type": "shell",
+            "command": "Write-Host",
+            "args": [
+                "`nXi640 Project 22:`n  Board:     stm32n6570_dk//fsbl`n  Build Dir: ${workspaceFolder}/build/primary`n  App:       ${workspaceFolder}/app`n"
+            ],
+            "options": {
+                "shell": {
+                    "executable": "powershell.exe",
+                    "args": ["-NoProfile", "-Command"]
+                }
+            },
+            "problemMatcher": []
+        }
+    ]
+}

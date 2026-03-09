@@ -1,4 +1,24 @@
-﻿/* FSBL overlay — nur UART Console */
+﻿/*
+ * Xi640 Project 22 — app.overlay
+ * STM32N6570-DK
+ *
+ * Phase 1: USB wird von USBX direkt initialisiert (ux_dcd_stm32.c)
+ * Kein Zephyr USB Stack — kein USB Node im Overlay nötig.
+ * USBX greift per HAL direkt auf den OTG HS Controller zu.
+ */
+
+/*
+ * PSRAM APS256XXN — bewährte Konfiguration aus Project 21
+ */
+&aps256xxn_obr {
+    max-frequency = <DT_FREQ_M(100)>;
+    read-latency  = <4>;
+    write-latency = <1>;
+    fixed-latency;
+    burst-length  = <3>;
+    rbx;
+    st,csbound    = <11>;
+};
 &usart1 {
     status = "okay";
 };
