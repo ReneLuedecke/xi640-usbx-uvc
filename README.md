@@ -31,10 +31,10 @@ west build -b stm32n6570_dk/stm32n657xx app
 | Phase | Ziel | Status |
 |-------|------|--------|
 | 0 | Architektur, Memory-Regeln | ✅ |
-| 1 | Zephyr USB deaktiviert | 🔄 |
-| 2 | USBX west-Module | ⏳ |
-| 3 | Zephyr Port-Layer | ⏳ |
-| 4 | DCD + HS PHY + DMA | ⏳ |
+| 1 | Zephyr USB deaktiviert | ✅ |
+| 2 | USBX west-Module | ✅ |
+| 3 | Zephyr Port-Layer | ✅ |
+| 4 | DCD + HS PHY + DMA | 🔄 |
 | 5 | UVC ISO Dummy-Stream | ⏳ |
 | 6 | DCMIPP Pipeline | ⏳ |
 | 7 | USB + Ethernet parallel | ⏳ |

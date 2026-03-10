@@ -32,7 +32,19 @@ file(GLOB USBX_UVC_SRC
 )
 target_sources(app PRIVATE ${USBX_UVC_SRC})
 
+# STM32N6 HAL PCD Sources — nicht automatisch von Zephyr eingebunden
+# da CONFIG_USB_DEVICE_STACK=n. Manuell einbinden fuer USBX DCD.
+set(HAL_PCD_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../modules/hal/stm32/stm32cube/stm32n6xx/drivers)
+target_sources(app PRIVATE
+    ${HAL_PCD_ROOT}/src/stm32n6xx_hal_pcd.c
+    ${HAL_PCD_ROOT}/src/stm32n6xx_hal_pcd_ex.c
+    ${HAL_PCD_ROOT}/src/stm32n6xx_ll_usb.c
+)
+
 target_compile_definitions(app PRIVATE
     UX_STANDALONE
     UX_DEVICE_SIDE_ONLY
+    UX_DCD_STM32_MAX_ED=9
+    UX_DEVICE_BIDIRECTIONAL_ENDPOINT_SUPPORT
+    HAL_PCD_MODULE_ENABLED
 )
