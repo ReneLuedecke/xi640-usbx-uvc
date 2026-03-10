@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "name": "Zephyr STM32N6570-DK",
+            "compilerPath": "${config:zephyr.sdk}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc.exe",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${config:zephyr.west.workspace}/zephyr/include/**",
+                "${config:zephyr.west.workspace}/zephyr/soc/st/stm32/**",
+                "${config:zephyr.west.workspace}/zephyr/boards/st/stm32n6570_dk/**",
+                "${config:zephyr.west.workspace}/modules/hal/stm32/stm32cube/stm32n6xx/**"
+            ],
+            "defines": [
+                "__ZEPHYR__=1",
+                "KERNEL"
+            ],
+            "intelliSenseMode": "gcc-arm",
+            "cStandard": "c17",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}

@@ -1,8 +1,5 @@
 build/
 modules/
-zephyr/
-bootloader/
-tools/
-.cache/
 *.pyc
 __pycache__/
+

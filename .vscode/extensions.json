@@ -1,0 +1,25 @@
+{
+    "recommendations": [
+        // Essential für Embedded C
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack",
+        
+        // Cortex-M Debug mit J-Link
+        "marus25.cortex-debug",
+        
+        // Zephyr-spezifisch
+        "trond-snekvik.kconfig-lang",
+        "plorefice.devicetree",
+        
+        // Build System
+        "twxs.cmake",
+        "ms-vscode.cmake-tools",
+        
+        // Serial Monitor
+        "ms-vscode.vscode-serial-monitor",
+        
+        // Git (optional aber hilfreich)
+        "mhutchie.git-graph",
+        "eamodio.gitlens"
+    ]
+}
