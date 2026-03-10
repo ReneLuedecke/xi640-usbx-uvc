@@ -13,20 +13,16 @@
                 "${workspaceFolder}/app"
             ],
             "options": {
-                "cwd": "${config:zephyr.west.workspace}"
+                "cwd": "${config:zephyr.west.workspace}",
+                "env": {
+                    "ZEPHYR_BASE": "${config:zephyr.west.workspace}/zephyr"
+                }
             },
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
-            "problemMatcher": ["$gcc"],
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": false
-            }
+            "problemMatcher": ["$gcc"]
         },
         {
             "label": "West Rebuild (Pristine)",
@@ -40,17 +36,13 @@
                 "${workspaceFolder}/app"
             ],
             "options": {
-                "cwd": "${config:zephyr.west.workspace}"
+                "cwd": "${config:zephyr.west.workspace}",
+                "env": {
+                    "ZEPHYR_BASE": "${config:zephyr.west.workspace}/zephyr"
+                }
             },
             "group": "build",
-            "problemMatcher": ["$gcc"],
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": false
-            }
+            "problemMatcher": ["$gcc"]
         },
         {
             "label": "West Flash",
@@ -61,17 +53,13 @@
                 "--build-dir", "${workspaceFolder}/build/primary"
             ],
             "options": {
-                "cwd": "${config:zephyr.west.workspace}"
+                "cwd": "${config:zephyr.west.workspace}",
+                "env": {
+                    "ZEPHYR_BASE": "${config:zephyr.west.workspace}/zephyr"
+                }
             },
             "group": "build",
-            "problemMatcher": [],
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": false
-            }
+            "problemMatcher": []
         },
         {
             "label": "West Debug Server",
@@ -82,13 +70,14 @@
                 "--build-dir", "${workspaceFolder}/build/primary"
             ],
             "options": {
-                "cwd": "${config:zephyr.west.workspace}"
+                "cwd": "${config:zephyr.west.workspace}",
+                "env": {
+                    "ZEPHYR_BASE": "${config:zephyr.west.workspace}/zephyr"
+                }
             },
             "isBackground": true,
             "problemMatcher": {
-                "pattern": {
-                    "regexp": "^$"
-                },
+                "pattern": { "regexp": "^$" },
                 "background": {
                     "activeOnStart": true,
                     "beginsPattern": "Starting server",
@@ -101,63 +90,42 @@
             "type": "shell",
             "command": "west",
             "args": [
-                "build",
-                "-t", "menuconfig",
+                "build", "-t", "menuconfig",
                 "-d", "${workspaceFolder}/build/primary"
             ],
             "options": {
-                "cwd": "${config:zephyr.west.workspace}"
+                "cwd": "${config:zephyr.west.workspace}",
+                "env": { "ZEPHYR_BASE": "${config:zephyr.west.workspace}/zephyr" }
             },
-            "problemMatcher": [],
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": true,
-                "panel": "dedicated",
-                "showReuseMessage": false
-            }
+            "problemMatcher": []
         },
         {
             "label": "RAM Report",
             "type": "shell",
             "command": "west",
             "args": [
-                "build",
-                "-t", "ram_report",
+                "build", "-t", "ram_report",
                 "-d", "${workspaceFolder}/build/primary"
             ],
             "options": {
-                "cwd": "${config:zephyr.west.workspace}"
+                "cwd": "${config:zephyr.west.workspace}",
+                "env": { "ZEPHYR_BASE": "${config:zephyr.west.workspace}/zephyr" }
             },
-            "problemMatcher": [],
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": false
-            }
+            "problemMatcher": []
         },
         {
             "label": "ROM Report",
             "type": "shell",
             "command": "west",
             "args": [
-                "build",
-                "-t", "rom_report",
+                "build", "-t", "rom_report",
                 "-d", "${workspaceFolder}/build/primary"
             ],
             "options": {
-                "cwd": "${config:zephyr.west.workspace}"
+                "cwd": "${config:zephyr.west.workspace}",
+                "env": { "ZEPHYR_BASE": "${config:zephyr.west.workspace}/zephyr" }
             },
-            "problemMatcher": [],
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": false
-            }
+            "problemMatcher": []
         },
         {
             "label": "Clean Build Directory",
@@ -167,28 +135,6 @@
                 "-Recurse", "-Force",
                 "-ErrorAction", "SilentlyContinue",
                 "${workspaceFolder}/build"
-            ],
-            "options": {
-                "shell": {
-                    "executable": "powershell.exe",
-                    "args": ["-NoProfile", "-Command"]
-                }
-            },
-            "problemMatcher": [],
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": false
-            }
-        },
-        {
-            "label": "Check Config",
-            "type": "shell",
-            "command": "Write-Host",
-            "args": [
-                "`nXi640 Project 22:`n  Board:     stm32n6570_dk//fsbl`n  Build Dir: ${workspaceFolder}/build/primary`n  App:       ${workspaceFolder}/app`n"
             ],
             "options": {
                 "shell": {
