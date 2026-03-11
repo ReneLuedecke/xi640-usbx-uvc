@@ -325,7 +325,30 @@ static int xi640_uvc_send_next_chunk(void)
 }
 
 /* ──────────────────────────────────────────────────────────────────────── */
-/*  Streaming Thread                                                       */
+/*  USBX Task-Thread (Prio 1 — hoeher als Streaming)                      */
+/*                                                                         */
+/*  ux_system_tasks_run() MUSS so schnell wie moeglich aufgerufen werden.  */
+/*  Im UX_STANDALONE-Modus verarbeitet USBX SETUP-Pakete (Enumeration)    */
+/*  und Video-Write-Tasks ausschliesslich in diesem Call — NICHT im ISR.  */
+/*  Der Host erwartet eine Descriptor-Antwort innerhalb von ~500 µs.      */
+/*  k_yield() statt k_sleep() damit der Thread sofort zurueckkehrt.       */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+K_THREAD_STACK_DEFINE(xi640_usbx_task_stack, 2048);
+static struct k_thread xi640_usbx_task_thread;
+
+static void xi640_usbx_task_thread_fn(void *p1, void *p2, void *p3)
+{
+    (void)p1; (void)p2; (void)p3;
+
+    while (1) {
+        ux_system_tasks_run();
+        k_yield(); /* CPU-Slot abgeben, sofort wieder bereit */
+    }
+}
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/*  Streaming Thread (Prio 2)                                              */
 /* ──────────────────────────────────────────────────────────────────────── */
 
 K_THREAD_STACK_DEFINE(xi640_uvc_stream_stack, 4096);
@@ -336,16 +359,13 @@ static void xi640_uvc_stream_thread_fn(void *p1, void *p2, void *p3)
     (void)p1; (void)p2; (void)p3;
 
     while (1) {
-        /* USBX State Machine pumpen (Enumeration + Transfer-Verarbeitung) */
-        ux_system_tasks_run();
-
         if (!atomic_get(&g_stream_active) || g_video_stream == NULL) {
-            /* Warte bis Streaming aktiv — 1ms schlafen um CPU freizugeben */
-            k_sleep(K_MSEC(1));
+            /* Noch kein Streaming — kurz abgeben, nicht schlafen */
+            k_yield();
             continue;
         }
 
-        /* Naechsten Payload-Chunk senden */
+        /* Naechsten Payload-Chunk an USBX uebergeben */
         if (!xi640_uvc_send_next_chunk()) {
             /* Kein freier Buffer — kurz yield dann retry */
             k_yield();
@@ -466,15 +486,29 @@ xi640_uvc_status_t xi640_uvc_init(void)
 
 void xi640_uvc_stream_start(void)
 {
+    /* ─── USBX Task-Thread starten (Prio 1, hoeher als Streaming) ─────── */
+    /* Dieser Thread pumpt ux_system_tasks_run() so schnell wie moeglich.  */
+    /* Ohne ihn wuerden Enumeration-SETUP-Pakete zu spaet beantwortet.     */
+    k_thread_create(&xi640_usbx_task_thread,
+                    xi640_usbx_task_stack,
+                    K_THREAD_STACK_SIZEOF(xi640_usbx_task_stack),
+                    xi640_usbx_task_thread_fn,
+                    NULL, NULL, NULL,
+                    1,          /* Prioritaet 1 — hoeher als Streaming-Thread */
+                    0,
+                    K_NO_WAIT);
+    k_thread_name_set(&xi640_usbx_task_thread, "usbx_tasks");
+    LOG_INF("USBX Task-Thread gestartet (Prio=1, Stack=2048)");
+
+    /* ─── Streaming-Thread starten (Prio 2) ───────────────────────────── */
     k_thread_create(&xi640_uvc_stream_thread,
                     xi640_uvc_stream_stack,
                     K_THREAD_STACK_SIZEOF(xi640_uvc_stream_stack),
                     xi640_uvc_stream_thread_fn,
                     NULL, NULL, NULL,
-                    2,          /* Prioritaet 2 (unter USB ISR) */
-                    0,          /* Keine User-Mode Flags */
+                    2,          /* Prioritaet 2 */
+                    0,
                     K_NO_WAIT);
     k_thread_name_set(&xi640_uvc_stream_thread, "uvc_stream");
-
     LOG_INF("UVC Streaming-Thread gestartet (Prio=2, Stack=4096)");
 }

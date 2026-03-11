@@ -168,7 +168,22 @@ xi640_dcd_status_t xi640_dcd_init(void)
         LOG_ERR("HAL_PCDEx_SetTxFiFo EP1 fehlgeschlagen: %d", hal_ret);
         return XI640_DCD_ERR_FIFO;
     }
-    LOG_DBG("FIFO: RX=%u, EP0=%u, EP1=%u Words",
+
+    /* Diagnose: DIEPTXF[0]-Register nach SetTxFiFo lesen.
+     * Bits 31:16 = TXFD (Depth in Words), Bits 15:0 = TXSA (Start-Adresse).
+     * Erwartet: TXFD=0x0800 (2048), TXSA=0x0600 (1536).
+     * Falls 0x00000000: HAL_PCD_Init hat Register noch nicht aktiviert. */
+    {
+        USB_OTG_GlobalTypeDef *usb_diag = XI640_DCD_USB_INSTANCE;
+        LOG_INF("DIEPTXF[0] nach EP1-SetTxFiFo: 0x%08x (erw. 0x08000600)",
+                usb_diag->DIEPTXF[0]);
+        LOG_INF("GRXFSIZ:        0x%08x (erw. 0x????0400)",
+                usb_diag->GRXFSIZ);
+        LOG_INF("DIEPTXF0:       0x%08x (erw. 0x02000400)",
+                usb_diag->DIEPTXF0_HNPTXFSIZ);
+    }
+
+    LOG_INF("FIFO: RX=%u, EP0=%u, EP1=%u Words",
             XI640_DCD_RX_FIFO_WORDS,
             XI640_DCD_EP0_TX_FIFO_WORDS,
             XI640_DCD_EP1_TX_FIFO_WORDS);
