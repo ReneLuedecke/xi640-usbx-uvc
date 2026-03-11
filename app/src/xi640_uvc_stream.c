@@ -48,18 +48,35 @@ LOG_MODULE_REGISTER(xi640_uvc, CONFIG_LOG_DEFAULT_LEVEL);
 #define XI640_COLORBAR_NB         8U
 
 /* ──────────────────────────────────────────────────────────────────────── */
-/*  Statische Puffer (Cache-Aligned fuer DMA-Sicherheit)                  */
+/*  Puffer-Adressen in AXISRAM3+4                                         */
+/*                                                                         */
+/*  FSBL RAM (AXISRAM2, 511 KB) reicht nicht fuer diese Puffer:           */
+/*    frame_buf  = 614400 B (600 KB)                                       */
+/*    usbx_pool  = 131072 B (128 KB)                                       */
+/*    Summe      = 745472 B (728 KB)                                       */
+/*                                                                         */
+/*  AXISRAM3 (0x34200000, 448 KB) + AXISRAM4 (0x34270000, 448 KB)        */
+/*  sind physisch kontiguierlich — zusammen 896 KB.                        */
+/*  Die Banken werden vom RAMCFG-Treiber eingeschaltet, weil das Overlay  */
+/*  &axisram3 / &axisram4 mit status = "okay" aktiviert.                  */
+/*                                                                         */
+/*  Feste Adresse statt section()-Attribut — kein Linker-Konflikt         */
+/*  mit dem BSS-Zero-Init in AXISRAM2 (zephyr,sram).                      */
 /* ──────────────────────────────────────────────────────────────────────── */
 
-/** USBX Memory Pool — AXISRAM34 (0x34200000), 32-Byte aligned.
- *  Ausgelagert aus dem FSBL RAM (AXISRAM2, 511 KB) da sonst Overflow. */
-static uint8_t usbx_pool[XI640_USBX_POOL_SIZE]
-    __attribute__((aligned(32), section("AXISRAM34")));
+/** AXISRAM3 Basisadresse (physisch, aus STM32N6 Reference Manual). */
+#define XI640_AXISRAM3_BASE  0x34200000U
 
-/** Frame Buffer mit Colorbar-Testbild — 640x480 YUYV.
- *  In AXISRAM34 (physisch AXISRAM3+4, 896 KB kombiniert). */
-static uint8_t frame_buf[XI640_UVC_FRAME_SIZE]
-    __attribute__((aligned(32), section("AXISRAM34")));
+/** Frame Buffer: ab AXISRAM3-Start — 614400 B.
+ *  614400 = 0x96000, endet bei 0x34296000 (mitten in AXISRAM4). */
+static uint8_t * const frame_buf =
+    (uint8_t *)XI640_AXISRAM3_BASE;
+
+/** USBX Pool: direkt nach frame_buf — 131072 B.
+ *  614400 ist exakt 32-Byte aligned (614400 / 32 = 19200).
+ *  Pool liegt bei 0x34296000, endet bei 0x342B6000 (innerhalb AXISRAM4). */
+static uint8_t * const usbx_pool =
+    (uint8_t *)(XI640_AXISRAM3_BASE + XI640_UVC_FRAME_SIZE);
 
 /* ──────────────────────────────────────────────────────────────────────── */
 /*  Modul-interner Zustand                                                 */
@@ -371,6 +388,9 @@ xi640_uvc_status_t xi640_uvc_init(void)
 
     /* ─── Probe/Commit Struktur initialisieren ─────────────────────────── */
     xi640_uvc_init_probe_commit();
+
+    /* ─── USBX Pool nullen (kein automatisches BSS-Zero-Init in AXISRAM3) */
+    memset(usbx_pool, 0, XI640_USBX_POOL_SIZE);
 
     /* ─── USBX System initialisieren ─────────────────────────────────── */
     ux_ret = ux_system_initialize(usbx_pool, XI640_USBX_POOL_SIZE,
