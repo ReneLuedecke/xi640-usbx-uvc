@@ -2,7 +2,7 @@
 # Xi640 USBX Zephyr Port Layer
 # KEIN cmake_minimum_required — wird via add_subdirectory() eingebunden
 
-set(USBX_ROOT  ${CMAKE_CURRENT_SOURCE_DIR}/../../../modules/st_usbx)
+set(USBX_ROOT  ${CMAKE_CURRENT_SOURCE_DIR}/../../modules/st_usbx)
 set(PORT_INC   ${CMAKE_CURRENT_SOURCE_DIR}/inc)
 set(PORT_SRC   ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -34,7 +34,7 @@ target_sources(app PRIVATE ${USBX_UVC_SRC})
 
 # STM32N6 HAL PCD Sources — nicht automatisch von Zephyr eingebunden
 # da CONFIG_USB_DEVICE_STACK=n. Manuell einbinden fuer USBX DCD.
-set(HAL_PCD_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../modules/hal/stm32/stm32cube/stm32n6xx/drivers)
+set(HAL_PCD_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../modules/hal/stm32/stm32cube/stm32n6xx/drivers)
 target_sources(app PRIVATE
     ${HAL_PCD_ROOT}/src/stm32n6xx_hal_pcd.c
     ${HAL_PCD_ROOT}/src/stm32n6xx_hal_pcd_ex.c
