@@ -343,7 +343,10 @@ static void xi640_usbx_task_thread_fn(void *p1, void *p2, void *p3)
 
     while (1) {
         ux_system_tasks_run();
-        k_yield(); /* CPU-Slot abgeben, sofort wieder bereit */
+        /* k_sleep statt k_yield — sleep gibt CPU an ALLE niedrigerprioren
+         * Threads ab (Log-SWQ, main, etc.). k_yield() bei preemptiver
+         * Prio 2 gibt nur an Prio 0..2 ab — SWQ (Prio 14) verhungert. */
+        k_sleep(K_MSEC(1));
     }
 }
 
@@ -489,26 +492,28 @@ void xi640_uvc_stream_start(void)
     /* ─── USBX Task-Thread starten (Prio 1, hoeher als Streaming) ─────── */
     /* Dieser Thread pumpt ux_system_tasks_run() so schnell wie moeglich.  */
     /* Ohne ihn wuerden Enumeration-SETUP-Pakete zu spaet beantwortet.     */
+    /* Prio 2 (preemptive) + k_sleep(1ms): gibt SWQ (Prio 14), main (Prio 10)
+     * und Streaming-Thread (Prio 3) regelmaessig CPU-Zeit. */
     k_thread_create(&xi640_usbx_task_thread,
                     xi640_usbx_task_stack,
                     K_THREAD_STACK_SIZEOF(xi640_usbx_task_stack),
                     xi640_usbx_task_thread_fn,
                     NULL, NULL, NULL,
-                    1,          /* Prioritaet 1 — hoeher als Streaming-Thread */
+                    2,          /* Preemptive Prio 2 */
                     0,
                     K_NO_WAIT);
     k_thread_name_set(&xi640_usbx_task_thread, "usbx_tasks");
-    LOG_INF("USBX Task-Thread gestartet (Prio=1, Stack=2048)");
+    LOG_INF("USBX Task-Thread gestartet (Prio=2, Stack=2048)");
 
-    /* ─── Streaming-Thread starten (Prio 2) ───────────────────────────── */
+    /* ─── Streaming-Thread starten (Prio 3 — unter USBX Task) ────────── */
     k_thread_create(&xi640_uvc_stream_thread,
                     xi640_uvc_stream_stack,
                     K_THREAD_STACK_SIZEOF(xi640_uvc_stream_stack),
                     xi640_uvc_stream_thread_fn,
                     NULL, NULL, NULL,
-                    2,          /* Prioritaet 2 */
+                    3,          /* Preemptive Prio 3 */
                     0,
                     K_NO_WAIT);
     k_thread_name_set(&xi640_uvc_stream_thread, "uvc_stream");
-    LOG_INF("UVC Streaming-Thread gestartet (Prio=2, Stack=4096)");
+    LOG_INF("UVC Streaming-Thread gestartet (Prio=3, Stack=4096)");
 }
