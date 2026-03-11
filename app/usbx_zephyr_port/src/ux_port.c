@@ -346,3 +346,21 @@ VOID tx_thread_relinquish(void)
 {
     k_yield();
 }
+
+/* -----------------------------------------------------------------------
+ * _ux_utility_interrupt_disable / _ux_utility_interrupt_restore
+ *
+ * USBX ruft diese als externe C-Funktionen auf wenn TX_API_H nicht
+ * definiert ist (d.h. kein ThreadX, nur Zephyr Port).
+ * Mapping auf Zephyr irq_lock / irq_unlock (ISR-safe).
+ * -------------------------------------------------------------------- */
+
+ALIGN_TYPE _ux_utility_interrupt_disable(VOID)
+{
+    return (ALIGN_TYPE)irq_lock();
+}
+
+VOID _ux_utility_interrupt_restore(ALIGN_TYPE flags)
+{
+    irq_unlock((unsigned int)flags);
+}

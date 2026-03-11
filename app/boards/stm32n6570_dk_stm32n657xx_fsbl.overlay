@@ -5,7 +5,30 @@
  * Phase 1: USB wird von USBX direkt initialisiert (ux_dcd_stm32.c)
  * Kein Zephyr USB Stack — kein USB Node im Overlay nötig.
  * USBX greift per HAL direkt auf den OTG HS Controller zu.
+ *
+ * Phase 5: Grosse Puffer (Frame Buffer 600 KB + USBX Pool 128 KB)
+ * werden in AXISRAM3+4 (0x34200000, 896 KB kombiniert) ausgelagert,
+ * da der FSBL RAM (AXISRAM2, 511 KB) sonst ueberlaeuft.
  */
+
+#include <zephyr/dt-bindings/memory-attr/memory-attr-arm.h>
+
+/ {
+	/*
+	 * AXISRAM3+4 kombiniert: 896 KB (2 × 448 KB, physisch kontiguierlich).
+	 * Aufnahme von: Frame Buffer (614400 B) + USBX Pool (131072 B) = 745 KB.
+	 * Physisch: 0x34200000 – 0x342E0000 (axisram3 @ 0x34200000,
+	 *                                    axisram4 @ 0x34270000)
+	 * Die einzelnen axisram3/4-Knoten bleiben disabled, um Konflikte
+	 * mit dem RAMCFG-Treiber zu vermeiden.
+	 */
+	xi640_video_mem: memory@34200000 {
+		compatible = "zephyr,memory-region";
+		reg = <0x34200000 DT_SIZE_K(896)>;
+		zephyr,memory-region = "AXISRAM34";
+		zephyr,memory-attr = <( DT_MEM_ARM(ATTR_MPU_RAM) )>;
+	};
+};
 
 /*
  * PSRAM APS256XXN — bewährte Konfiguration aus Project 21

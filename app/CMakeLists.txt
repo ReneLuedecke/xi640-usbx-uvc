@@ -6,6 +6,8 @@ project(xi640_usbx_uvc)
 target_sources(app PRIVATE
     src/main.c
     src/xi640_dcd.c
+    src/xi640_uvc_descriptors.c
+    src/xi640_uvc_stream.c
 )
 
 target_include_directories(app PRIVATE inc)

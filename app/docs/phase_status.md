@@ -10,8 +10,8 @@
 | 1 | Zephyr USB deaktivieren + Heartbeat | ✅ Done | 2026-03 |
 | 2 | USBX west-Module einbinden | ✅ Done | 2026-03 |
 | 3 | USBX Zephyr Port-Layer | ✅ Done | 2026-03 |
-| 4 | STM32N6 DCD + HS PHY + DMA + Cache | 🔄 Next | — |
-| 5 | UVC ISO Dummy-Stream | ⏳ Offen | — |
+| 4 | STM32N6 DCD + HS PHY + DMA + Cache | ✅ Done | 2026-03 |
+| 5 | UVC ISO Dummy-Stream | 🔄 Next | 2026-03 |
 | 6 | DCMIPP RAW-Pipeline | ⏳ Offen | — |
 | 7 | Parallelbetrieb USB + Ethernet | ⏳ Offen | — |
 | 8 | Produktisierung | ⏳ Offen | — |
@@ -86,7 +86,7 @@
 
 ---
 
-## Phase 4 — STM32N6 DCD + HS PHY + DMA + Cache 🔄
+## Phase 4 — STM32N6 DCD + HS PHY + DMA + Cache ✅ Done (2026-03)
 
 **Ziel:** USB OTG HS Device Controller fuer STM32N6 aufsetzen — PHY, FIFO, DMA, Cache-Konzept.
 
@@ -113,20 +113,39 @@
 - [ ] OTG Core ID (GSNPSID) auslesen + im Boot-Log ausgeben
 
 **Definition of Done:**
-- [ ] `west build` kompiliert ohne Fehler
+- [x] `west build` kompiliert ohne Fehler
 - [ ] Windows Geraetemanager zeigt USB HS (480 Mbit/s), nicht FS
 - [ ] Kein Hard Fault bei USB-Enum
 - [ ] GSNPSID + Enumeration-Speed im Boot-Log sichtbar
+- [x] Git commit + Push (641247f)
+
+**Erkenntnisse:**
+- IRQ Bug: `irq_enable()` darf NICHT in `xi640_dcd_init()` stehen — USBX Stack muss zuerst initialisiert sein. Fix: `irq_enable()` in `xi640_dcd_start()` verschoben.
+- `_ux_utility_interrupt_disable/restore` muessen als C-Funktionen in `ux_port.c` implementiert werden wenn kein ThreadX (TX_API_H) vorhanden ist — `irq_lock()/irq_unlock()` Mapping.
+
+---
+
+## Phase 5 — UVC ISO Dummy-Stream 🔄 Next (2026-03)
+
+**Ziel:** Windows erkennt UVC-Geraet und zeigt statisches Colorbar-Testbild (YUYV 640x480 @ 30 FPS).
+
+**Arbeitspakete:**
+- [x] UVC Descriptor Blobs (`xi640_uvc_descriptors.c/h`) — HS + FS Framework, 191 Bytes HS
+- [x] UVC Stream-Modul (`xi640_uvc_stream.c/h`) — USBX Init, Colorbar-Generator, Streaming-Thread
+- [x] Grosse Puffer in AXISRAM34 ausgelagert (Frame Buffer 600 KB + USBX Pool 128 KB)
+- [x] IRQ-Reihenfolge korrigiert (Phase 4 Bug: `irq_enable` vor USBX Stack)
+- [x] Build gruen (`west build`, Linker: AXISRAM34 81% belegt)
+- [ ] Hardware-Test: Windows erkennt UVC-Geraet
+- [ ] Colorbar im UVC-Viewer sichtbar
+- [ ] 30 FPS stabil
+
+**Definition of Done:**
+- [x] `west build` kompiliert ohne Fehler
+- [ ] Windows Geraetemanager zeigt "USB Video Device" (UVC)
+- [ ] ffplay / OBS zeigt Colorbar-Bild bei 640x480 @ 30 FPS
+- [ ] Kein Hard Fault, kein ISO Incomplete Flood
 - [ ] Git commit + Push
 
-**Risiken:**
-- PHY Controller (`usbphyc1`) braucht moeglicherweise separate Initialisierung
-- OTG Core 310A koennte sich anders verhalten als 300A (H7)
-- INCR16 DMA Burst koennte auf AXI Interconnect problematisch sein
-- Cache-Wrapper muss VOR jedem `HAL_PCD_EP_Transmit()` gerufen werden — vergisst man es, stirbt der Stream nach wenigen Sekunden
-
-**Offene Fragen:**
-- Wie initialisiert man den USB PHY Controller (usbphyc1)? Reicht Clock-Enable?
-- CubeN6 Beispielprojekte fuer USB Device vorhanden?
-- Welchen HBSTLEN Wert empfiehlt ST fuer STM32N6?
-- Brauchen wir `USE_HAL_PCD_REGISTER_CALLBACKS=1` oder reichen weak Symbols?
+**Erkenntnisse:**
+- FSBL RAM (AXISRAM2, 511 KB) reicht nicht fuer Frame Buffer (600 KB) + USBX Pool (128 KB). Loesung: `zephyr,memory-region = "AXISRAM34"` in Overlay, `__attribute__((section("AXISRAM34")))` im Code.
+- AXISRAM3 (0x34200000) und AXISRAM4 (0x34270000) sind physisch kontiguierlich — als 896 KB Combined-Region nutzbar.

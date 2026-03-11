@@ -173,10 +173,11 @@ xi640_dcd_status_t xi640_dcd_init(void)
             XI640_DCD_EP0_TX_FIFO_WORDS,
             XI640_DCD_EP1_TX_FIFO_WORDS);
 
-    /* ─── Schritt 4: Zephyr ISR verbinden ─────────────────────────────── */
+    /* ─── Schritt 4: Zephyr ISR verbinden (noch NICHT enablen) ────────── */
+    /* IRQ wird erst in xi640_dcd_start() enabled — nach vollstaendiger  */
+    /* USBX Stack Initialisierung. Sonst: Hard Fault bei erstem SETUP.   */
     IRQ_CONNECT(XI640_DCD_IRQ_NUM, XI640_DCD_IRQ_PRIO,
                 _ux_dcd_stm32_interrupt_handler, NULL, 0);
-    irq_enable(XI640_DCD_IRQ_NUM);
 
     LOG_INF("USB OTG HS DCD bereit (IRQ %d, Prio %d)",
             XI640_DCD_IRQ_NUM, XI640_DCD_IRQ_PRIO);
@@ -203,6 +204,10 @@ xi640_dcd_status_t xi640_dcd_register_usbx(void)
 
 xi640_dcd_status_t xi640_dcd_start(void)
 {
+    /* IRQ jetzt enablen — USBX Stack ist vollstaendig initialisiert.    */
+    /* Erst ab hier darf der USB-Interrupt feuern.                       */
+    irq_enable(XI640_DCD_IRQ_NUM);
+
     HAL_StatusTypeDef ret = HAL_PCD_Start(&hpcd);
 
     if (ret != HAL_OK) {
