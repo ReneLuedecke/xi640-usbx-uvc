@@ -376,6 +376,8 @@ int dcmipp_capture_get_frame(uint8_t **data, uint32_t *size, int timeout_ms)
 
 #else /* DCMIPP_BYPASS_HAL == 0: Zephyr Video-Stack */
 
+#error "DCMIPP_BYPASS_HAL=0 nicht implementiert in P22 — DCMIPP_BUF_C undefiniert. Setze DCMIPP_BYPASS_HAL=1 in CMakeLists.txt."
+
     struct video_buffer *vbuf;
     k_timeout_t timeout;
 

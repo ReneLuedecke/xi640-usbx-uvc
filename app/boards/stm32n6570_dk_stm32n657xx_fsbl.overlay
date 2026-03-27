@@ -127,7 +127,7 @@
  * Polaritaeten (kritisch — aus P16 bestaetigt):
  *   hsync-active = 0: HSYNC active LOW  <- BUGFIX (1 -> DCMIPP las nur Blanking!)
  *   vsync-active = 0: VSYNC active LOW
- *   pclk-sample  = 0: Sample auf FALLENDER PSYNC-Flanke (PCKPOL=0)
+ *   pclk-sample  = 0: Zephyr-Stack-Pfad FALLING. HAL-Bypass (P22 aktiv) nutzt RISING — Wert ignoriert.
  *
  * data-lanes: Dummy fuer STM32_DCMIPP_HAS_CSI compile-time Pruefung.
  * STM32N6 hat CSI-HW -> Treiber liest data_lanes auch im Parallel-Modus.
@@ -162,7 +162,7 @@
 			bus-width = <14>;
 			hsync-active = <0>;
 			vsync-active = <0>;
-			pclk-sample  = <0>;
+			pclk-sample  = <0>;   /* Zephyr-Stack-Pfad: FALLING (PCKPOL=0). HAL-Bypass (aktiv in P22) konfiguriert RISING direkt — dieser Wert wird ignoriert. */
 			data-lanes = <1 2>;
 		};
 	};
