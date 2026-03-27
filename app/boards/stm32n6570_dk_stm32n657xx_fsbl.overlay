@@ -1,49 +1,169 @@
 /*
- * Xi640 Project 22 — app.overlay
- * STM32N6570-DK
+ * Xi640 Project 22 — Board Overlay stm32n6570_dk//fsbl
  *
- * Phase 1: USB wird von USBX direkt initialisiert (ux_dcd_stm32.c)
- * Kein Zephyr USB Stack — kein USB Node im Overlay noetig.
- * USBX greift per HAL direkt auf den OTG HS Controller zu.
- *
- * Phase 5: AXISRAM3–6 aktivieren.
- *   - Der RAMCFG-Treiber schaltet die HW-Bänke nur ein, wenn
- *     die originalen axisram-Knoten status = "okay" haben.
- *   - frame_buf (614 KB) und usbx_pool (128 KB) liegen per
- *     fester Adresse (0x34200000) in AXISRAM3+4.
+ * Console: USART10 (PB9=TX, PD3=RX)
+ * AXISRAM3-6: aktiviert fuer Frame-Buffer (spaetere Phasen)
+ * PSRAM: 100 MHz stabile Konfiguration (200 MHz instabil auf DK-Board)
  */
 
-/*
- * PSRAM APS256XXN — bewährte Konfiguration aus Project 21
- */
-&aps256xxn_obr {
-    max-frequency = <DT_FREQ_M(100)>;
-    read-latency  = <4>;
-    write-latency = <1>;
-    fixed-latency;
-    burst-length  = <3>;
-    rbx;
-    st,csbound    = <11>;
+/ {
+	chosen {
+		zephyr,console = &usart10;
+		zephyr,shell-uart = &usart10;
+	};
 };
 
 &usart1 {
-    status = "okay";
+	status = "disabled";
 };
 
-/* AXISRAM3–6 einschalten (RAMCFG HW-Bänke).
- * frame_buf + usbx_pool liegen in AXISRAM3+4 (zusammen 896 KB). */
+&usart10 {
+	status = "okay";
+	pinctrl-0 = <&usart10_tx_pb9 &usart10_rx_pd3>;
+	pinctrl-names = "default";
+	current-speed = <115200>;
+};
+
+/* AXISRAM3-6 einschalten (RAMCFG HW-Baenke).
+ * Nur originale axisram-Knoten triggern den RAMCFG-Treiber korrekt. */
 &axisram3 {
-    status = "okay";
+	status = "okay";
 };
 
 &axisram4 {
-    status = "okay";
+	status = "okay";
 };
 
 &axisram5 {
-    status = "okay";
+	status = "okay";
 };
 
 &axisram6 {
-    status = "okay";
+	status = "okay";
+};
+
+/* ===== Lynred ATTO640D-04 GPIOs ===== */
+/ {
+	atto640d_ctrl {
+		compatible = "gpio-leds";
+		atto640d_nrst: atto640d_nrst {
+			gpios = <&gpioc 9 GPIO_ACTIVE_HIGH>;
+			label = "ATTO640D_NRST";
+		};
+		atto640d_seq_trig: atto640d_seq_trig {
+			gpios = <&gpioc 8 GPIO_ACTIVE_HIGH>;
+			label = "ATTO640D_SEQ_TRIG";
+		};
+		atto640d_avdd_en: atto640d_avdd_en {
+			gpios = <&gpioe 9 GPIO_ACTIVE_HIGH>;
+			label = "ATTO640D_AVDD_EN";
+		};
+		atto640d_vdda_en: atto640d_vdda_en {
+			gpios = <&gpioe 15 GPIO_ACTIVE_HIGH>;
+			label = "ATTO640D_VDDA_EN";
+		};
+	};
+};
+
+/* ===== I2C1: Lynred ATTO640D-04 @ 0x12 ===== */
+&i2c1 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	pinctrl-0 = <&i2c1_scl_ph9 &i2c1_sda_pc1>;
+	pinctrl-names = "default";
+};
+
+/* ===== MC Clock: TIM3_CH2 auf PC7, 33 MHz ===== */
+&timers3 {
+	status = "okay";
+	st,prescaler = <0>;
+
+	atto640d_mc_pwm: pwm {
+		status = "okay";
+		pinctrl-0 = <&tim3_ch2_pc7>;
+		pinctrl-names = "default";
+	};
+};
+
+/* PSRAM @ 100 MHz — stabiler als 200 MHz (CLAUDE.md: ~109 MB/s Write, ~202 MB/s Read).
+ * burst-length=3 (2K Wrap), rbx: bewaehrte Konfiguration aus Project 21. */
+&aps256xxn_obr {
+	status = "okay";
+	max-frequency = <DT_FREQ_M(100)>;
+	read-latency = <4>;
+	write-latency = <1>;
+	fixed-latency;
+	burst-length = <3>;
+	rbx;
+	st,csbound = <11>;
+};
+
+/*
+ * ── Lynred ATTO640D-04 Video-Source Node (fuer DCMIPP-Treiber) ─────────────
+ * Der DCMIPP-Treiber (video_stm32_dcmipp.c) benoetigt ein Zephyr-Device am
+ * Source-Endpoint. Dieser Node registriert den atto640d_video_stub.
+ * Echte Hardware-Ansteuerung laeuft ueber atto640d_init() in lynred_atto640d.c.
+ */
+/ {
+	atto640d: atto640d {
+		compatible = "lynred,atto640d-04";
+		status = "okay";
+
+		port {
+			atto640d_ep_out: endpoint {
+				remote-endpoint-label = "dcmipp_ep_in";
+			};
+		};
+	};
+};
+
+/*
+ * ── DCMIPP: 14-Bit Parallel Interface ─────────────────────────────────────
+ *
+ * Pin-Mapping (STM32N6570-DK Schaltplan):
+ *   Data[0..13]: PD7 PE6 PC5 PE10 PE8 PE4 PB6 PB7 PE1 PD4 PB14 PD8 PD12 PD13
+ *   PIXCLK: PD5 (PSYNC via CPLD), HSYNC: PC0, VSYNC: PB8
+ *
+ * Polaritaeten (kritisch — aus P16 bestaetigt):
+ *   hsync-active = 0: HSYNC active LOW  <- BUGFIX (1 -> DCMIPP las nur Blanking!)
+ *   vsync-active = 0: VSYNC active LOW
+ *   pclk-sample  = 0: Sample auf FALLENDER PSYNC-Flanke (PCKPOL=0)
+ *
+ * data-lanes: Dummy fuer STM32_DCMIPP_HAS_CSI compile-time Pruefung.
+ * STM32N6 hat CSI-HW -> Treiber liest data_lanes auch im Parallel-Modus.
+ */
+&dcmipp {
+	status = "okay";
+	pinctrl-0 = <
+		&dcmipp_pixclk_pd5
+		&dcmipp_hsync_pc0
+		&dcmipp_vsync_pb8
+		&dcmipp_d0_pd7
+		&dcmipp_d1_pe6
+		&dcmipp_d2_pc5
+		&dcmipp_d3_pe10
+		&dcmipp_d4_pe8
+		&dcmipp_d5_pe4
+		&dcmipp_d6_pb6
+		&dcmipp_d7_pb7
+		&dcmipp_d8_pe1
+		&dcmipp_d9_pd4
+		&dcmipp_d10_pb14
+		&dcmipp_d11_pd8
+		&dcmipp_d12_pd12
+		&dcmipp_d13_pd13
+	>;
+	pinctrl-names = "default";
+
+	port {
+		dcmipp_ep_in: endpoint {
+			remote-endpoint-label = "atto640d_ep_out";
+			bus-type = <VIDEO_BUS_TYPE_PARALLEL>;
+			bus-width = <14>;
+			hsync-active = <0>;
+			vsync-active = <0>;
+			pclk-sample  = <0>;
+			data-lanes = <1 2>;
+		};
+	};
 };
