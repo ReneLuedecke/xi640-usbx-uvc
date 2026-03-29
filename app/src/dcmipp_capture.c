@@ -72,6 +72,15 @@ static struct video_buffer vbuf_b;
 
 
 /* ============================================================
+ * dcmipp_capture_get_buffers()
+ * ============================================================ */
+void dcmipp_capture_get_buffers(uint8_t **a, uint8_t **b)
+{
+    *a = frame_buf_a;
+    *b = frame_buf_b;
+}
+
+/* ============================================================
  * dcmipp_capture_init()
  * ============================================================ */
 int dcmipp_capture_init(void)

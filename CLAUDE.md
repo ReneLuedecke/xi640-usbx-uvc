@@ -16,10 +16,10 @@ Xi640 ist Firmware für eine Optris Thermalkamera auf dem STM32N6570-DK (Cortex-
 | Board | STM32N6570-DK |
 | RTOS | Zephyr 4.3.99 (main branch) |
 | USB Stack | Zephyr `device_next` (CONFIG_USB_DEVICE_STACK_NEXT=y) |
-| USB Treiber | Zephyr UDC DWC2 (udc_dwc2.c — ISO bereits für UAC2 vorhanden) |
+| USB Treiber | Zephyr `udc_stm32.c` (HAL-PCD Wrapper, OTG HS1 @ 0x08040000) |
 | Build-Variante | `//fsbl` — Code in AXISRAM → SW-Breakpoints |
 | Zielformat | 640×480 YUYV @ 30 FPS = 18,43 MB/s |
-| Aktueller USB-Modus | **Bulk** (DCMIPP→UVC läuft — echte Thermaldaten @ ~19-22 FPS ✅) |
+| Aktueller USB-Modus | **Bulk** (DCMIPP→UVC Zero-Copy @ **52 FPS** ✅, AMCap bestätigt) |
 | Ziel USB-Modus | **ISO High-Bandwidth** (3×1024 = 24,6 MB/s max — Fork `usbd_uvc_iso.c` bereit) |
 | Ethernet | RAW/RTSP parallel (54,5 MB/s bereits erreicht) |
 
@@ -83,20 +83,21 @@ Sensor (ATTO640D) → CPLD (MachXO2) → AD9649 ADC → DCMIPP → AXISRAM Ring 
                                                                                                       └→ VENC H.264 (optional, später)
 ```
 
-### Aktueller Stand (Phase C — DCMIPP→UVC Streaming funktioniert ✅)
+### Aktueller Stand (Phase D — 52 FPS Zero-Copy Streaming ✅)
 
 ```
-ATTO640D → AD9649 → CPLD → DCMIPP Pipe0 → AXISRAM1 (Double-Buffer)
-    → memcpy → AXISRAM3 (UVC Buffer) → USB Bulk HS → Windows UVC
+ATTO640D → AD9649 → CPLD → DCMIPP Pipe0 → AXISRAM1 (frame_buf_a/b)
+    → D-Cache invalidate → video_enqueue(uvc_dev) [Zero-Copy]
+    → DWC2 DMA (EP1 TX FIFO 3288B) → USB Bulk HS → Windows UVC
 ```
 
-~19-22 FPS bei 640×480 YUYV. Windows Kamera-App zeigt echte Infrarotbilder.
-DCMIPP liefert 52 FPS — USB Bulk ist der Bottleneck (max ~14 MB/s unter Last).
+**52 FPS** bei 640×480 YUYV (614400 B/Frame). AMCap: 52,06 FPS, 0 dropped frames.
+DCMIPP-Rate (52 FPS) wird voll ausgeschöpft — kein USB-Bottleneck mehr bei Bulk.
 
-### Nächster Schritt (Phase ISO-1 — Fork aktivieren)
+### Nächster Schritt (Phase ISO-1 — optional, Bulk reicht für Produkt)
 
-`usbd_uvc_iso.c` in `CMakeLists.txt` einbinden, `CONFIG_USBD_VIDEO_CLASS=n` setzen.
-Ziel: ISO High-Bandwidth (3×1024 = 24,6 MB/s) → 30 FPS erreichbar.
+Bulk erreicht bereits DCMIPP-Rate. ISO bleibt als Option für Multi-Stream-Szenarien.
+`usbd_uvc_iso.c` Fork vorhanden — Aktivierung in CMakeLists.txt wenn nötig.
 
 ### USB UVC Streaming — Kritische Erkenntnisse
 
@@ -120,9 +121,11 @@ video_enqueue(uvc_dev, &uvc_buf);
 
 Header: `#include <zephyr/video/video.h>` (nicht `<zephyr/drivers/video.h>`).
 
-**UVC Buffer-Adressen:**
-- `0x34200000` (AXISRAM3, 614.400 B) + `0x34296000` (AXISRAM3+4, 614.400 B)
-- NICHT in PSRAM — DWC2 USB-DMA braucht AXI-Bus-erreichbaren Speicher (RISAF fehlt)
+**UVC Buffer-Adressen (Phase D: Zero-Copy direkt aus DCMIPP-Buffern):**
+- `frame_buf_a` / `frame_buf_b` aus `dcmipp_capture.c` — in AXISRAM1 (`.dcmipp_frames.a/b`)
+- DWC2 DMA liest direkt aus AXISRAM1 (OTG1/OTG2 haben RIMC CID1)
+- AXISRAM3/4 (0x34200000/0x34296000) wird nicht mehr als UVC-Buffer genutzt (1.2 MB frei)
+- NICHT in PSRAM — DMA-Master braucht RISAF-Konfiguration für XSPI-Region
 
 ---
 
@@ -283,7 +286,8 @@ Bulk HS:    512 × N        = max ~14 MB/s (unter Last) — daher ISO Ziel
 | A2 | USBX: STM32N6 DCD + HS PHY | ⛔ Aufgegeben (xact errors) | 2026-03 |
 | **B** | **Zephyr Bulk Baseline + DCMIPP-Sim** | **✅ Abgeschlossen** | **2026-03** |
 | **C** | **DCMIPP→UVC echte Thermaldaten** | **✅ Abgeschlossen** | **2026-03-29** |
-| **ISO-1** | **ISO Fork aktivieren** | **🔄 Nächster Schritt** | — |
+| **D** | **52 FPS Zero-Copy (Phase 4+5)** | **✅ Abgeschlossen** | **2026-03-29** |
+| ISO-1 | ISO Fork aktivieren | ⏳ Optional | — |
 | ISO-2 | Hardware-Test: ISO Enumeration | ⏳ Offen | — |
 | ISO-3 | Hardware-Test: ISO Streaming (Colorbar) | ⏳ Offen | — |
 | ISO-4 | DCMIPP Integration (echte Kamera) | ⏳ Offen | — |
@@ -322,7 +326,19 @@ Bulk HS:    512 × N        = max ~14 MB/s (unter Last) — daher ISO Ziel
 - Security: ALLE 16 ITNS-Register löschen (for-Schleife), VTOR_NS auf `SCB->VTOR & ~(1<<28)`
 - Kconfig: `-DCONFIG_FOO=n` überschreibt `default y` nicht zuverlässig → EXTRA_CONF_FILE
 - Diagnose-Build: `diag_swgen.conf` für SW-Generator A/B-Test vorhanden
-- Performance: ~19-22 FPS bei 640×480 YUYV unkomprimiert, 1000+ Frames stabil
+- Performance: ~22-25 FPS bei 640×480 YUYV unkomprimiert, 1000+ Frames stabil
+
+**Phase D — 52 FPS Zero-Copy Streaming (2026-03-29):**
+- `uvc_enqueue()` ist non-blocking (`k_fifo_put` + sofort Return) — Pipeline möglich
+- DCMIPP `frame_buf_a/b` direkt als UVC-Pool-Einträge registriert (kein AXISRAM3/4 mehr)
+- Pipeline: `get_frame()`(25ms) läuft WÄHREND USB vorherigen Frame sendet → Overlap
+- Bugfix: `K_NO_WAIT`→`K_MSEC(100)` für dequeue — kein spurious `get_frame()` retry
+- `dcmipp_capture_get_buffers(a, b)` API hinzugefügt für AXISRAM1-Buffer-Export
+- OTG-HS TX FIFO: 128W(512B, 1×MPS) → 822W(3288B, 6.4×MPS) via DIEPTXF1-Register
+- Flush-Sequenz: GRSTCTL.TXFNUM=1 + TXFFLSH=1 → Warte auto-clear → neuen Wert setzen
+- Timing: nach USB-Enumeration, vor erstem Frame-Transfer (kein aktiver Transfer)
+- `udc_stm32.c` verwendet standardmäßig nur 128W TX FIFO — 2776B DRAM ungenutzt!
+- AMCap-Ergebnis: 52,06 FPS, 0 dropped frames, 0 ms Jitter
 
 **ISO Fork (Phase 3/4 — Code vorhanden, noch nicht aktiviert):**
 - `usbd_uvc_iso.c`: Fork von Zephyr `usbd_uvc.c` mit Alt 0 (kein EP) + Alt 1 (ISO EP `0x1400 = 3×1024`)
@@ -333,11 +349,12 @@ Bulk HS:    512 × N        = max ~14 MB/s (unter Last) — daher ISO Ziel
 - **Header-Includes im Fork:** `#include "usbd_uvc.h"` / `"video_ctrls.h"` / `"video_device.h"` (LOKAL, nicht absolut)
   → CMakeLists.txt: `zephyr_include_directories(${ZEPHYR_BASE}/subsys/usb/device_next/class)`
 
-### Nächste Schritte: Phase ISO-1 — Fork aktivieren
+### Nächste Schritte: Phase ISO-1 — Optional (Bulk @ 52 FPS reicht für Produkt)
 
-**Vorbedingung:** Bulk Baseline läuft stabil ✅
+**Bulk-Status:** 52 FPS bei 640×480 YUYV = DCMIPP-Rate voll ausgeschöpft ✅
+ISO-Upgrade nur nötig wenn Multi-Stream (USB + Ethernet simultan) oder garantierte Latenz.
 
-**Schritte:**
+**ISO-Aktivierung falls benötigt:**
 1. `CMakeLists.txt`: `target_sources(app PRIVATE src/usbd_uvc_iso.c)` statt `CONFIG_USBD_VIDEO_CLASS`
 2. `prj.conf`: `# CONFIG_USBD_VIDEO_CLASS=n` → durch eigene UVC-Klasse ersetzen
 3. `west build --pristine` + Flash

@@ -29,16 +29,12 @@
 
 LOG_MODULE_REGISTER(uvc_sample, LOG_LEVEL_INF);
 
-/* UVC TX-Buffer in AXISRAM3/4 — DWC2 DMA erreicht AXISRAM (AXI-Bus).
- * PSRAM (0x90000000) war der Crash-Auslöser: DWC2 DMA kann XSPI-mapped PSRAM
- * nicht lesen (RISAF für XSPI-Region fehlte für USB-DMA-Master-CID).
- * AXISRAM3 (0x34200000, 512 KB) + AXISRAM4 (0x34280000, 512 KB) aktiviert im Overlay.
- * buf0: 0x34200000..0x34296000 (614400 B, AXISRAM3+4)
- * buf1: 0x34296000..0x3432C000 (614400 B, AXISRAM4+5) */
-#define UVC_AXISRAM_BUF0  0x34200000UL
-#define UVC_AXISRAM_BUF1  0x34296000UL
-/* Wrapper-Structs: nur .index und .type werden von video_enqueue() genutzt.
- * video_import_buffer() trägt .buffer/.size in video_buf[idx] ein. */
+/* Phase 4: DCMIPP frame_buf_a/b direkt als UVC-Pool-Einträge.
+ * Kein separater AXISRAM3/4-Buffer mehr — DWC2 DMA liest aus AXISRAM1
+ * (OTG1 + OTG2 haben CID1 via RIMC → Zugriff auf alle AXISRAM-Bänke OK).
+ * Wrapper-Structs: nur .index und .type werden von video_enqueue() genutzt.
+ * video_import_buffer() trägt .buffer/.size in video_buf[idx] ein.
+ * video_dequeue() liefert &video_buf[idx] zurück (Pool-Eintrag direkt). */
 static struct video_buffer uvc_static_bufs[2];
 
 const static struct device *const uvc_dev = DEVICE_DT_GET(DT_NODELABEL(uvc));
@@ -49,38 +45,42 @@ const static struct device *const video_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_cam
 
 static struct video_caps video_caps = {.type = VIDEO_BUF_TYPE_OUTPUT};
 
-/* ---- Benchmark-Statistik ---- */
+/* ---- Benchmark-Statistik (Sliding Window, 30 Frames) ---- */
 static struct {
-	uint32_t frames;
-	uint32_t bytes;
-	int64_t  start_ms;
+	uint32_t window_frames;    /* Frames im aktuellen Fenster */
+	uint32_t window_start_ms;  /* Fensterbeginn (k_uptime_get_32) */
+	uint32_t total_frames;     /* Gesamt-Frames seit Reset */
 } bench;
 
 static void bench_reset(uint32_t frame_size)
 {
-	bench.frames   = 0;
-	bench.bytes    = 0;
-	bench.start_ms = k_uptime_get();
-	LOG_INF("Benchmark gestartet, Frame-Groesse: %u Bytes",
-		frame_size);
+	bench.window_frames   = 0U;
+	bench.window_start_ms = k_uptime_get_32();
+	bench.total_frames    = 0U;
+	LOG_INF("Benchmark gestartet, Frame-Groesse: %u Bytes", frame_size);
 }
 
 static void bench_update(uint32_t frame_size)
 {
-	bench.frames++;
-	bench.bytes += frame_size;
+	bench.window_frames++;
+	bench.total_frames++;
 
-	if (bench.frames % 30 == 0) {
-		int64_t elapsed = k_uptime_get() - bench.start_ms;
+	if (bench.window_frames >= 30U) {
+		uint32_t now     = k_uptime_get_32();
+		uint32_t elapsed = now - bench.window_start_ms;
 
-		if (elapsed > 0) {
-			uint32_t fps  = (bench.frames * 1000U) / (uint32_t)elapsed;
-			uint32_t kbps = (uint32_t)((uint64_t)bench.bytes * 8U /
-						   (uint32_t)elapsed);
-
-			LOG_INF("Bench: %u Frames | %u FPS | %u kbit/s",
-				bench.frames, fps, kbps);
+		if (elapsed > 0U) {
+			uint32_t fps  = (30U * 1000U) / elapsed;
+			uint32_t kbps = (uint32_t)(
+				((uint64_t)bench.window_frames * frame_size * 8U)
+				/ elapsed);
+			LOG_INF("UVC: %u FPS | %u kbit/s "
+				"(Fenster %u ms) | gesamt: %u Frames",
+				fps, kbps, elapsed, bench.total_frames);
 		}
+
+		bench.window_start_ms = now;
+		bench.window_frames   = 0U;
 	}
 }
 /* ---- Ende Benchmark ---- */
@@ -363,6 +363,51 @@ int main(void)
 	LOG_WRN("USB Speed: %u (0=FS 1=HS)",
 		usbd_bus_speed(sample_usbd));
 
+	/* ── Phase 5: OTG-HS TX-FIFO Tuning ────────────────────────────────────
+	 * udc_stm32.c berechnet EP1-TX FIFO = DIV_ROUND_UP(MPS=512, 4) = 128 Words
+	 * = 512 Bytes = 1×MPS. 2776 B freies DRAM bleiben ungenutzt.
+	 * Fix: EP1-TX auf Rest des DRAM ausweiten (822 Words = 3288 B = 6.4×MPS).
+	 * → Weniger FIFO-Stalls, besserer Burst-Durchsatz für Bulk-IN.
+	 *
+	 * Timing: nach Enumeration (Host hat Format gewählt), vor erstem Transfer.
+	 * Kein aktiver Transfer auf EP1 → FIFO-Flush ist sicher.
+	 *
+	 * Basis-Adresse: DT usbotg_hs1 @ 0x08040000 (AHB5 auf STM32N6). */
+	{
+		volatile uint32_t *grxfsiz   =
+			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x024U);
+		volatile uint32_t *gnptxfsiz =
+			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x028U);
+		volatile uint32_t *dieptxf1  =
+			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x104U);
+		volatile uint32_t *grstctl   =
+			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x010U);
+
+		uint32_t rx_words  = *grxfsiz   & 0xFFFFU;
+		uint32_t ep0_depth = (*gnptxfsiz >> 16) & 0xFFFFU;
+		uint32_t ep1_depth = (*dieptxf1 >> 16) & 0xFFFFU;
+		uint32_t ep1_start = *dieptxf1 & 0xFFFFU;
+		uint32_t total     = rx_words + ep0_depth + ep1_depth;
+
+		LOG_INF("FIFO: RX=%uW(%uB) EP0=%uW(%uB) EP1=%uW(%uB) frei=%uB",
+			rx_words,  rx_words  * 4U,
+			ep0_depth, ep0_depth * 4U,
+			ep1_depth, ep1_depth * 4U,
+			4096U - total * 4U);
+
+		/* EP1 TX FIFO auf verfügbaren Rest ausweiten.
+		 * Flush zuerst: GRSTCTL.TXFNUM=1 (EP1), TXFFLSH=1 (bit5). */
+		*grstctl = (1UL << 6) | (1UL << 5);     /* TXFNUM=1, TXFFLSH=1 */
+		while (*grstctl & (1UL << 5)) {}         /* Warte bis auto-clear */
+
+		uint32_t ep1_new_depth = (4096U / 4U) - ep1_start;  /* 1024 - 202 = 822W */
+		*dieptxf1 = (ep1_new_depth << 16) | ep1_start;
+
+		LOG_INF("FIFO Tuning: EP1-TX %uW(%uB) → %uW(%uB) @ Word %u",
+			ep1_depth, ep1_depth * 4U,
+			ep1_new_depth, ep1_new_depth * 4U, ep1_start);
+	}
+
 	/* ── Streaming-Loop: DCMIPP oder SW-Generator → UVC ──────────────────
 	 * CONFIG_XI640_UVC_SOURCE_DCMIPP=y (default): DCMIPP liefert Frames.
 	 * CONFIG_XI640_UVC_SOURCE_DCMIPP=n:           SW-Generator Colorbar.
@@ -374,35 +419,38 @@ int main(void)
 	 * UVC TX Buffer in AXISRAM3/4 — DWC2 DMA + CPU nutzen denselben CID1. */
 	LOG_INF("=== DCMIPP→UVC Streaming ===");
 
-	/* video_import_buffer() registriert externe AXISRAM-Adressen in video_buf[].
-	 * video_enqueue() benutzt &video_buf[buf->index], NICHT buf->buffer direkt.
-	 * Ohne import wäre video_buf[0].buffer = NULL → UVC-Treiber greift auf NULL zu. */
+	/* Phase 4: DCMIPP-Buffer direkt als UVC-Pool-Einträge registrieren.
+	 * video_enqueue() liest &video_buf[buf->index].buffer → direkt AXISRAM1.
+	 * Kein Umweg über AXISRAM3/4 — 1.2 MB gespart, ein Kopier-Hop weniger. */
 	{
-		uint16_t idx;
+		uint8_t  *dcmipp_buf_a, *dcmipp_buf_b;
+		uint16_t  idx;
 
-		ret = video_import_buffer((uint8_t *)UVC_AXISRAM_BUF0, fmt.size, &idx);
+		dcmipp_capture_get_buffers(&dcmipp_buf_a, &dcmipp_buf_b);
+
+		ret = video_import_buffer(dcmipp_buf_a, fmt.size, &idx);
 		if (ret != 0) {
-			LOG_ERR("video_import_buffer[0] fehlgeschlagen: %d", ret);
+			LOG_ERR("video_import_buffer[a] fehlgeschlagen: %d", ret);
 			return ret;
 		}
 		uvc_static_bufs[0].index = idx;
 		uvc_static_bufs[0].type  = VIDEO_BUF_TYPE_INPUT;
-		LOG_INF("AXISRAM BUF0 @ 0x%08x → video_buf[%u]",
-			UVC_AXISRAM_BUF0, idx);
+		LOG_INF("DCMIPP buf_a @ %p → video_buf[%u]",
+			(void *)dcmipp_buf_a, idx);
 
-		ret = video_import_buffer((uint8_t *)UVC_AXISRAM_BUF1, fmt.size, &idx);
+		ret = video_import_buffer(dcmipp_buf_b, fmt.size, &idx);
 		if (ret != 0) {
-			LOG_ERR("video_import_buffer[1] fehlgeschlagen: %d", ret);
+			LOG_ERR("video_import_buffer[b] fehlgeschlagen: %d", ret);
 			return ret;
 		}
 		uvc_static_bufs[1].index = idx;
 		uvc_static_bufs[1].type  = VIDEO_BUF_TYPE_INPUT;
-		LOG_INF("AXISRAM BUF1 @ 0x%08x → video_buf[%u]",
-			UVC_AXISRAM_BUF1, idx);
+		LOG_INF("DCMIPP buf_b @ %p → video_buf[%u]",
+			(void *)dcmipp_buf_b, idx);
 	}
 
-	/* Initial-Enqueue: bytesused=0 (von video_import_buffer gesetzt).
-	 * UVC sendet leere Frames (nur Header) bis DCMIPP Daten liefert — safe. */
+	/* Initial-Enqueue: beide Buffer einreihen (bytesused=0 — UVC sendet
+	 * leere Header-Frames bis DCMIPP Nutzdaten liefert, das ist safe). */
 	ret = video_enqueue(uvc_dev, &uvc_static_bufs[0]);
 	if (ret != 0) {
 		LOG_ERR("initial enqueue[0] fehlgeschlagen: %d", ret);
@@ -413,7 +461,7 @@ int main(void)
 		LOG_ERR("initial enqueue[1] fehlgeschlagen: %d", ret);
 		return ret;
 	}
-	LOG_INF("DCMIPP→UVC: beide Buffer eingereiht — starte Loop");
+	LOG_INF("Phase 4 Pipeline: beide Buffer eingereiht — starte Loop");
 
 	{
 		uint8_t            *frame_data;
@@ -421,9 +469,15 @@ int main(void)
 		uint32_t            frame_count = 0U;
 		struct video_buffer *done_buf;
 
+		bench_reset(fmt.size);
+
 		while (true) {
+			/* 1. DCMIPP-Frame capturen — PARALLEL zu laufendem USB-Transfer.
+			 *    DCMIPP braucht ~25ms (40 FPS), USB ~38ms (26 FPS).
+			 *    → get_frame() kehrt zurück während USB noch ~13ms läuft.
+			 *    D-Cache-Invalidierung bereits in get_frame() enthalten. */
 			ret = dcmipp_capture_get_frame(&frame_data, &frame_size,
-						       100);
+						       200);
 			if (ret == -ETIMEDOUT) {
 				k_sleep(K_MSEC(1));
 				continue;
@@ -433,30 +487,37 @@ int main(void)
 				break;
 			}
 
-			ret = video_dequeue(uvc_dev, &done_buf, K_NO_WAIT);
+			/* 2. Blockierendes Dequeue — USB ~13ms nach get_frame() fertig.
+			 *    K_MSEC(100) statt K_NO_WAIT: kein spurious get_frame() retry
+			 *    mehr. done_buf == &video_buf[idx] (Pool-Eintrag direkt). */
+			ret = video_dequeue(uvc_dev, &done_buf, K_MSEC(100));
 			if (ret != 0) {
-				k_sleep(K_MSEC(1));
+				LOG_WRN("UVC dequeue timeout (frame %u): %d",
+					frame_count, ret);
+				/* frame_data verloren — nächste Iteration holt neuen Frame */
 				continue;
 			}
 
-			memcpy(done_buf->buffer, frame_data,
-			       MIN(frame_size, fmt.size));
-			sys_cache_data_flush_range(done_buf->buffer,
-						   MIN(frame_size, fmt.size));
-			done_buf->bytesused = fmt.size;
+			/* 3. Zero-Copy: Pool-Eintrag direkt auf DCMIPP-Frame zeigen.
+			 *    CPU schreibt NICHT in diesen Buffer → kein cache flush nötig.
+			 *    Invalidierung in dcmipp_capture_get_frame() ausreichend. */
+			done_buf->buffer    = frame_data;
+			done_buf->size      = frame_size;
+			done_buf->bytesused = frame_size;
 			done_buf->type      = VIDEO_BUF_TYPE_INPUT;
 
 			frame_count++;
-			if (frame_count <= 5U || frame_count % 50U == 0U) {
-				LOG_INF("DCMIPP→UVC frame %u buf=%p",
-					frame_count, (void *)done_buf->buffer);
-			}
+			LOG_DBG("DCMIPP→UVC frame %u buf=%p",
+				frame_count, (void *)done_buf->buffer);
+
+			/* 4. USB-Transfer starten — nächste Iteration beginnt sofort
+			 *    mit get_frame() und überlappt so mit diesem Transfer. */
 			ret = video_enqueue(uvc_dev, done_buf);
 			if (ret != 0) {
 				LOG_ERR("video_enqueue fehlgeschlagen: %d", ret);
 				break;
 			}
-			bench_update(fmt.size);
+			bench_update(frame_size);
 		}
 	}
 
@@ -519,6 +580,7 @@ int main(void)
 			return ret;
 		}
 		LOG_INF("SW-Gen: stream gestartet, beginne Loop");
+		bench_reset(fmt.size);
 
 		while (true) {
 			/* 1. Colorbar-Frame holen */

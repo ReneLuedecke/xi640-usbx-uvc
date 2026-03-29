@@ -26,6 +26,15 @@
 int dcmipp_capture_init(void);
 
 /**
+ * @brief Gibt Adressen der internen Frame-Buffer zurück.
+ *        Für video_import_buffer()-Registrierung als UVC-Pool-Einträge.
+ *        Muss nach dcmipp_capture_init() aufgerufen werden.
+ * @param a  Zeiger auf Frame-Buffer A (DCMIPP DMA-Ziel)
+ * @param b  Zeiger auf Frame-Buffer B (DCMIPP DMA-Ziel)
+ */
+void dcmipp_capture_get_buffers(uint8_t **a, uint8_t **b);
+
+/**
  * @brief Wartet auf den nächsten fertigen Frame und gibt Zeiger zurück.
  *        D-Cache wird nach DMA-Schreibzugriff invalidiert.
  *        Buffer wird automatisch wieder in die Queue eingereiht.
