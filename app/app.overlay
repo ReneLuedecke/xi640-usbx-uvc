@@ -1,0 +1,15 @@
+/ {
+	chosen {
+		zephyr,camera = &sw_generator;
+	};
+
+	sw_generator: sw-generator {
+		compatible = "zephyr,video-sw-generator";
+		status = "okay";
+	};
+
+	uvc: uvc {
+		compatible = "zephyr,uvc-device";
+		status = "okay";
+	};
+};

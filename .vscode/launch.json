@@ -1,0 +1,43 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Xi640 (ST-LINK via West Debug Server)",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/primary/zephyr/zephyr.elf",
+            "request": "launch",
+            "type": "cortex-debug",
+            "gdbTarget": "127.0.0.1:61234",
+            "servertype": "external",
+            "gdbPath": "${config:zephyr.sdk}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe",
+            "runToEntryPoint": "main",
+            "overrideLaunchCommands": [
+                "load"
+            ],
+            "preLaunchTask": "West Debug Server"
+        },
+        {
+            "name": "Xi640 (ST-LINK Attach)",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/primary/zephyr/zephyr.elf",
+            "request": "attach",
+            "type": "cortex-debug",
+            "gdbTarget": "127.0.0.1:61234",
+            "servertype": "external",
+            "gdbPath": "${config:zephyr.sdk}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe"
+        },
+        {
+            "name": "Xi640 (J-Link Attach)",
+            "type": "cortex-debug",
+            "request": "attach",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/primary/zephyr/zephyr.elf",
+            "servertype": "jlink",
+            "device": "STM32N657X0",
+            "interface": "swd",
+            "runToEntryPoint": false,
+            "showDevDebugOutput": "parsed",
+            "svdFile": "${config:zephyr.west.workspace}/modules/hal/stm32/stm32cube/stm32n6xx/drivers/include/stm32n657xx.svd"
+        }
+    ]
+}

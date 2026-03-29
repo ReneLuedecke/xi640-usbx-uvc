@@ -404,12 +404,12 @@ int atto640d_init(void)
     }
     LOG_INF("ATTO640D: DIGITAL_OUTPUT (0x0041) = 0x40 (ADC_EN=0, externer AD9649 aktiv)");
 
-   /* DAC_GFID (0x004B) = 0x77: V = 0.011×0x50 + 0.7806 = 2.09 V */
+   /* DAC_GFID (0x004B) = 0x77: V = 0.011×0x50 + 0.7806 = 2.09 V 
     ret = atto640d_i2c_write_reg(ATTO640D_REG_DAC_GFID, 0x90U);
     if (ret != 0) {
         LOG_WRN("ATTO640D: DAC_GFID Write fehlgeschlagen: %d", ret);
     }
-    LOG_INF("ATTO640D: DAC_GFID (0x004B) = 0x77 (2.09 V)");
+    LOG_INF("ATTO640D: DAC_GFID (0x004B) = 0x77 (2.09 V)");*/
 
     /* DAC_GSK_A (0x004C) = 0x01 
     ret = atto640d_i2c_write_reg(ATTO640D_REG_DAC_GSK_A, 0x01U);

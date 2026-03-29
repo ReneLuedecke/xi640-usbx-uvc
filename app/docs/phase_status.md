@@ -2,150 +2,194 @@
 
 > Living document — nach jeder Phase aktualisieren
 
+---
+
 ## Übersicht
 
 | Phase | Titel | Status | Datum |
 |-------|-------|--------|-------|
-| 0 | Architektur fixieren | ✅ Done | 2026-03 |
-| 1 | Zephyr USB deaktivieren + Heartbeat | ✅ Done | 2026-03 |
-| 2 | USBX west-Module einbinden | ✅ Done | 2026-03 |
-| 3 | USBX Zephyr Port-Layer | ✅ Done | 2026-03 |
-| 4 | STM32N6 DCD + HS PHY + DMA + Cache | ✅ Done | 2026-03 |
-| 5 | UVC ISO Dummy-Stream | 🔄 Next | 2026-03 |
-| 6 | DCMIPP RAW-Pipeline | ⏳ Offen | — |
-| 7 | Parallelbetrieb USB + Ethernet | ⏳ Offen | — |
-| 8 | Produktisierung | ⏳ Offen | — |
+| A0 | USBX: Architektur fixieren | ✅ Abgeschlossen (aufgegeben) | 2026-03 |
+| A1 | USBX: Zephyr Port-Layer | ✅ Abgeschlossen (aufgegeben) | 2026-03 |
+| A2 | USBX: STM32N6 DCD + HS PHY | ⛔ Aufgegeben (xact errors) | 2026-03 |
+| **B** | **Zephyr Bulk Baseline + DCMIPP-Sim** | **✅ Abgeschlossen** | **2026-03** |
+| **ISO-1** | **ISO Fork aktivieren** | **🔄 Nächster Schritt** | — |
+| ISO-2 | Hardware-Test: ISO Enumeration | ⏳ Offen | — |
+| ISO-3 | Hardware-Test: ISO Streaming (Colorbar) | ⏳ Offen | — |
+| ISO-4 | DCMIPP Integration (echte Kamera) | ⏳ Offen | — |
+| ISO-5 | Integration + FPS Test + Produktisierung | ⏳ Offen | — |
 
 ---
 
-## Phase 1 — Heartbeat Baseline ✅
+## USBX-Ära — A0 bis A2 ✅⛔ (aufgegeben 2026-03)
 
-**Definition of Done:**
-- [x] Build mit `stm32n6570_dk//fsbl` erfolgreich
-- [x] Zephyr USB Stack vollständig deaktiviert (`CONFIG_USB_DEVICE_STACK=n`)
-- [x] Debugger hält bei `main` (ST-LINK via West Debug Server)
-- [x] Kein "usbd" / "UDC" im Boot-Log
-- [x] Git commit + Push
+**Warum aufgegeben:** USB HS IN-Transfer xact errors trotz RIFSC-Fix, DSB/ISB, k_sem-Pattern — nicht in vertretbarer Zeit lösbar.
 
-**Erkenntnisse:**
+**Erkenntnisse die weiter gelten:**
 - FSBL-Variante (`//fsbl`) notwendig damit Code in AXISRAM läuft → SW-Breakpoints funktionieren
 - Overlay-Datei muss `boards/stm32n6570_dk_stm32n657xx_fsbl.overlay` heißen
 - prj.conf muss ohne BOM (UTF-8 ohne BOM / ASCII) gespeichert werden
-- Zephyr 4.3.99 (main branch) — 4.1.0 hatte `aps256xxn_obr` Node noch nicht
+- AXISRAM-Bänke über originale DTS-Knoten (`&axisram3 { status = "okay"; }`) aktivieren — Custom `memory@xxxxx` Knoten triggern RAMCFG-Treiber NICHT
+- USB OTG HS PHY braucht VDD USB Supply + PHY Reference Clock (USBPHYC_CR FSEL=0x2 für 24 MHz HSE)
+- `k_yield()` gibt CPU nur an gleich-/höher-priorisierte Threads ab — Idle-Loops: `k_sleep(K_MSEC(1))`
+
+**Dead Code (vorhanden, nicht kompiliert):**
+- `app/usbx_zephyr_port/` — USBX Port-Layer
+- `app/src/xi640_dcd.c`, `app/src/usbx_zephyr.c`, `app/src/xi640_uvc_stream.c` — USBX-Ära
+- `app/inc/xi640_dcd.h`, `app/inc/usbx*.h`, `app/inc/xi640_uvc_stream.h` — USBX-Ära
 
 ---
 
-## Phase 2 — USBX west-Module ✅
+## Phase B — Zephyr Bulk Baseline + DCMIPP-Sim ✅ (2026-03)
+
+**Ziel:** Stabile Plattform: Windows erkennt UVC-Gerät, Colorbar / DCMIPP-simulierte Frames sichtbar.
+
+**Ergebnis:** Build grün, DCMIPP-Simulation läuft, Benchmark-Ausgabe aktiv.
+
+**Konfiguration:**
+```kconfig
+CONFIG_USB_DEVICE_STACK_NEXT=y
+CONFIG_USBD_VIDEO_CLASS=y          # Zephyr Bulk UVC (aktiv)
+CONFIG_VIDEO_SW_GENERATOR=y
+CONFIG_VIDEO_BUFFER_POOL_NUM_MAX=8
+CONFIG_VIDEO_BUFFER_POOL_SZ_MAX=614400
+CONFIG_USBD_VIDEO_NUM_BUFS=128
+CONFIG_UDC_STM32_MAX_QMESSAGES=64
+CONFIG_MAIN_STACK_SIZE=4096
+CONFIG_SAMPLE_USBD_PID=0x0022
+CONFIG_SAMPLE_USBD_PRODUCT="Xi640 UVC Bulk"
+CONFIG_SAMPLE_USBD_MANUFACTURER="Optris"
+```
+
+**app.overlay (neu):**
+```dts
+/ {
+    chosen { zephyr,camera = &sw_generator; };
+    sw_generator: sw-generator {
+        compatible = "zephyr,video-sw-generator";
+        status = "okay";
+    };
+    uvc: uvc {
+        compatible = "zephyr,uvc-device";
+        status = "okay";
+    };
+};
+```
+
+**CMakeLists.txt:**
+```cmake
+project(xi640_uvc_bulk)
+include(${ZEPHYR_BASE}/samples/subsys/usb/common/common.cmake)
+target_sources(app PRIVATE src/main.c)
+```
+
+**west.yml:** Nur Zephyr (`import: true`, `revision: main`) — kein USBX/ThreadX mehr.
+
+**main.c Architektur (Phase 9: DCMIPP-Simulation):**
+- `k_timer` @ 25 ms gibt `k_sem_give()` → simuliert DCMIPP VSYNC
+- `video_dequeue()` (K_NO_WAIT) → Frame-Counter schreiben → `video_enqueue()` zurück
+- Drop bei USB zu langsam (K_NO_WAIT = echte DCMIPP Semantik)
+- Benchmark alle 30 Frames: FPS + kbps in LOG_INF
 
 **Definition of Done:**
-- [x] `stm32-mw-usbx` @ `280f6bc` (v6.4.0_260116) in `modules/st_usbx`
-- [x] `threadx` @ `3726d790` (v6.5.0.202601_rel) in `modules/threadx`
-- [x] west.yml mit gepinnten SHAs
-- [x] `modules/` in `.gitignore` — nicht eingecheckt
-- [ ] Build noch grün (prüfen nach CMakeLists-Integration)
+- [x] `west build` kompiliert ohne Fehler
+- [ ] Windows Gerätemanager zeigt "USB-Videogerät" (UVC) ← **Hardware-Test ausstehend**
+- [ ] ffplay / OBS zeigt Bild bei 640×480 ← **Hardware-Test ausstehend**
+- [x] Git commit (letzter: `13723d6`)
+
+---
+
+## Phase ISO-1 — ISO Fork aktivieren 🔄 (Nächster Schritt)
+
+**Ziel:** `usbd_uvc_iso.c` ersetzte `CONFIG_USBD_VIDEO_CLASS` — USB Descriptor zeigt Alt 0 (kein EP) + Alt 1 (ISO EP 0x1400).
+
+**Voraussetzung:** Phase B Build läuft stabil ✅
+
+**Arbeitspakete:**
+- [ ] `CMakeLists.txt`: `src/usbd_uvc_iso.c` hinzufügen, Zephyr-interne Include-Pfade einbinden
+- [ ] `prj.conf`: `CONFIG_USBD_VIDEO_CLASS` deaktivieren (Fork übernimmt)
+- [ ] Kconfig-Symbole prüfen: `CONFIG_USBD_VIDEO_*` — werden vom Fork genutzt oder eigene nötig?
+- [ ] `west build --pristine` + Flash
+- [ ] USBTreeView: Alt 0 (0 EPs) + Alt 1 (ISO EP 0x1400 = 3×1024) ✅
+- [ ] Bus Hound: Probe/Commit + SET_INTERFACE(1) bestätigt
+
+**Kritische Punkte im Fork (`usbd_uvc_iso.c`):**
+- `uvc_update()` ruft `uvc_flush_queue(dev)` auf wenn `alternate == 1` ✅ (implementiert)
+- `dwMaxPayloadTransferSize = 3072` (MPS, nicht frame_size) ✅ (implementiert)
+- `uvc_continue_transfer()` begrenzt auf MPS ✅ (implementiert)
+- ZLP = false für ISO ✅ (implementiert)
+
+**Interne Zephyr-Header-Abhängigkeiten:**
+```
+usbd_uvc_iso.c benötigt:
+  - zephyr/subsys/usb/device_next/class/usbd_uvc.h     (interne API)
+  - zephyr/subsys/usb/device_next/class/video_ctrls.h
+  - zephyr/subsys/usb/device_next/class/video_device.h
+```
+→ `zephyr_include_directories(${ZEPHYR_BASE}/subsys/usb/device_next/class)` in CMakeLists.txt
+
+**Definition of Done:**
+- [ ] `west build --pristine` ohne Fehler
+- [ ] USBTreeView: ISO Descriptor korrekt (Alt 0 + Alt 1 mit 0x1400)
+- [ ] Kein Hard Fault bei Probe/Commit
 - [ ] Git commit + Push
 
-**Erkenntnisse:**
-- eclipse-threadx verwendet `master` als Hauptbranch (nicht `main`)
-- Remote-Name in west.yml muss exakt dem org-Namen entsprechen: `eclipse-threadx`
+---
+
+## Phase ISO-2 — Hardware-Test: ISO Enumeration ⏳
+
+**Ziel:** Windows erkennt UVC mit korrekten ISO Deskriptoren, Host startet ISO-Transfer-Anfragen.
+
+**Erwartetes Verhalten ohne Streaming-Daten:**
+- USBTreeView: `wMaxPacketSize = 0x1400`
+- Bus Hound: `SET_INTERFACE(1)` → Host sendet ISO-Anfragen → "isoc req failed" (normal ohne Daten)
+
+**Definition of Done:**
+- [ ] Windows Gerätemanager: "USB-Videogerät"
+- [ ] Host startet ISO Requests nach SET_INTERFACE(1)
+- [ ] Kein USB Reset Loop, kein Hard Fault
 
 ---
 
-## Phase 3 — USBX Zephyr Port-Layer ✅ Done (2026-03)
+## Phase ISO-3 — Hardware-Test: ISO Streaming (Colorbar) ⏳
 
-**Ziel:** `ux_port.h` / `ux_port.c` implementieren sodass USBX auf Zephyr-Primitiven läuft
-
-**Arbeitspakete:**
-- [x] `ux_port.h` — Typ-Mappings TX_THREAD → k_thread, TX_MUTEX → k_mutex, TX_SEMAPHORE → k_sem, UX_BYTE_POOL → k_heap
-- [x] `ux_port.c` — Implementierung aller 5 kritischen Fixes (kein malloc, suspend/resume korrekt, Timeout-Mapping, Cache-Alignment)
-- [x] CMakeLists.txt für `modules/usbx_zephyr_port/` (Zephyr-Modul, `CONFIG_USBX_ZEPHYR_PORT`-Guard)
-- [x] Kconfig für USBX Module (`CONFIG_USBX_ZEPHYR_PORT`, `CONFIG_USBX_HEAP_SIZE` default 65536)
-- [x] Build grün (kein USB noch aktiv)
+**Ziel:** Windows-Kamera-App / AMCap zeigt Colorbar / grau gefülltes YUYV-Bild @ 640×480 @ 30 FPS.
 
 **Definition of Done:**
-- [x] `west build` kompiliert ohne Fehler
-- [x] Keine ThreadX-Kernel-Calls im Code — nur Zephyr-Primitiven
-- [x] Git commit + Push (e47241c)
-
-**Erkenntnisse:**
-
-- `_ux_thread_start_ctx` direkt in `UX_THREAD` eingebettet — kein `k_malloc` im Hot Path; der Wrapper `zephyr_thread_entry()` holt Entry-Point und Parameter sicher aus dem struct.
-- `k_thread_suspend(tid)` / `k_thread_resume(tid)` sind die einzig korrekten Primitiven. `k_sleep(K_FOREVER)` suspendiert den Aufrufer-Thread (den Port-Code selbst), nicht den USBX-Thread — hätte subtile Deadlocks erzeugt.
-- `k_wakeup(tid)` bricht nur `k_sleep` ab, setzt keinen suspendierten Thread fort — `k_thread_resume` ist zwingend.
-- Timeout-Mapping: `UX_WAIT_FOREVER (0xFFFFFFFF)` muss explizit auf `K_FOREVER` geprüft werden; `K_MSEC(0xFFFFFFFF)` würde ~49 Tage ergeben und wurde vermieden.
-- `k_sem_give()` ist ISR-safe — als einzige USBX-Synchronisationsprimitive in ISR-Kontext erlaubt; `k_mutex_lock()` ist es nicht.
-- Cache-Maintenance: `cache_aligned()` rundet Adresse auf 32-Byte-Cache-Line-Grenze ab und Größe auf, bevor `sys_cache_data_flush_range` / `sys_cache_data_invd_range` aufgerufen wird — ein unaligned Flush/Invalidate auf dem Cortex-M55 ist wirkungslos.
-- `UX_BYTE_POOL` wird auf `k_heap` gemappt — USBX allokiert internen Speicher ausschließlich darüber; `CONFIG_USBX_HEAP_SIZE` (default 65536) bestimmt die Poolgröße.
-- Port-Layer liegt unter `modules/usbx_zephyr_port/` (Zephyr-Modul-Pfad); `app/CMakeLists.txt` bindet ihn per `add_subdirectory(usbx_zephyr_port)` ein.
-- Host-Tests (native_posix) wurden nicht realisiert — `k_heap`, `k_thread_suspend/resume` sind schwer auf native_posix zu mocken; Verifikation erfolgte über erfolgreichen Target-Build.
-
-**Offene Fragen beantwortet:**
-
-- *USBX Standalone-Modus (`UX_STANDALONE`)*: Thread-Create wird von USBX intern aufgerufen; der Port-Layer muss Thread-Lifecycle vollständig abbilden (nicht entfallen).
-- *Heap-Leak-Verifikation ohne Hardware*: Wurde auf Phase 4 verschoben — erst wenn DCD + USB-Stack aktiv, sinnvoll messbar via Zephyr Heap Stats.
-
----
-
-## Phase 4 — STM32N6 DCD + HS PHY + DMA + Cache ✅ Done (2026-03)
-
-**Ziel:** USB OTG HS Device Controller fuer STM32N6 aufsetzen — PHY, FIFO, DMA, Cache-Konzept.
-
-**Analyse:** Siehe `phase4_dcd_analysis.md` fuer vollstaendige Ergebnisse.
-
-**Kern-Erkenntnis:** Der USBX DCD Treiber (`ux_dcd_stm32_*.c`) ist familienagnostisch und braucht KEINE Aenderung. Unsere Arbeit liegt in `xi640_dcd.c` — einem Konfigurations- und Glue-Layer zwischen Zephyr, HAL PCD und USBX.
-
-**Arbeitspakete:**
-- [x] DCD Treiber-Analyse (Funktionsumfang, Abhaengigkeiten)
-- [x] HAL PCD Analyse (STM32N6 vs. H7, PHY, DMA)
-- [x] Interface-Entwurf (`xi640_dcd.h`)
-- [ ] `xi640_dcd.c` Implementierung:
-  - [ ] `PCD_HandleTypeDef` Init (Instance=USB1_OTG_HS, phy=EMBEDDED, dma=1, speed=HS, eps=9, sof=1)
-  - [ ] `HAL_PCD_MspInit()` Override (Clock: AHB5 Bit 26 + 28, PHY Controller)
-  - [ ] FIFO: `HAL_PCDEx_SetRxFiFo(1024)`, `SetTxFiFo(0, 512)`, `SetTxFiFo(1, 2048)`
-  - [ ] DMA Burst: Erstmal INCR4 (HAL Default), spaeter tunen
-  - [ ] ISR: `IRQ_CONNECT(177, 2, _ux_dcd_stm32_interrupt_handler, NULL, 0)`
-  - [ ] `_ux_dcd_stm32_initialize(0, &hpcd)` Registrierung
-  - [ ] Cache-Wrapper (`xi640_dcd_cache_flush/invalidate`)
-  - [ ] Diagnostik (`xi640_dcd_get_diagnostics`)
-- [ ] CMakeLists.txt: `HAL_PCD_MODULE_ENABLED` + HAL PCD Sources + `UX_DCD_STM32_MAX_ED=9`
-- [ ] Build gruen (`west build`)
-- [ ] Hardware-Test: Enumeration (Windows Geraetemanager zeigt HS, nicht FS)
-- [ ] OTG Core ID (GSNPSID) auslesen + im Boot-Log ausgeben
-
-**Definition of Done:**
-- [x] `west build` kompiliert ohne Fehler
-- [ ] Windows Geraetemanager zeigt USB HS (480 Mbit/s), nicht FS
-- [ ] Kein Hard Fault bei USB-Enum
-- [ ] GSNPSID + Enumeration-Speed im Boot-Log sichtbar
-- [x] Git commit + Push (641247f)
-
-**Erkenntnisse:**
-- IRQ Bug: `irq_enable()` darf NICHT in `xi640_dcd_init()` stehen — USBX Stack muss zuerst initialisiert sein. Fix: `irq_enable()` in `xi640_dcd_start()` verschoben.
-- `_ux_utility_interrupt_disable/restore` muessen als C-Funktionen in `ux_port.c` implementiert werden wenn kein ThreadX (TX_API_H) vorhanden ist — `irq_lock()/irq_unlock()` Mapping.
-
----
-
-## Phase 5 — UVC ISO Dummy-Stream 🔄 Next (2026-03)
-
-**Ziel:** Windows erkennt UVC-Geraet und zeigt statisches Colorbar-Testbild (YUYV 640x480 @ 30 FPS).
-
-**Arbeitspakete:**
-- [x] UVC Descriptor Blobs (`xi640_uvc_descriptors.c/h`) — HS + FS Framework, 191 Bytes HS
-- [x] UVC Stream-Modul (`xi640_uvc_stream.c/h`) — USBX Init, Colorbar-Generator, Streaming-Thread
-- [x] Grosse Puffer in AXISRAM34 ausgelagert (Frame Buffer 600 KB + USBX Pool 128 KB)
-- [x] IRQ-Reihenfolge korrigiert (Phase 4 Bug: `irq_enable` vor USBX Stack)
-- [x] Build gruen (`west build`, Linker: AXISRAM34 81% belegt)
-- [ ] Hardware-Test: Windows erkennt UVC-Geraet
-- [ ] Colorbar im UVC-Viewer sichtbar
-- [ ] 30 FPS stabil
-
-**Definition of Done:**
-- [x] `west build` kompiliert ohne Fehler
-- [ ] Windows Geraetemanager zeigt "USB Video Device" (UVC)
-- [ ] ffplay / OBS zeigt Colorbar-Bild bei 640x480 @ 30 FPS
-- [ ] Kein Hard Fault, kein ISO Incomplete Flood
+- [ ] AMCap / Windows Kamera: Bild sichtbar
+- [ ] FPS > 20 bei 640×480 YUYV
+- [ ] Kein ISO Incomplete Flood (GINTSTS prüfen)
+- [ ] 10× Reconnect ohne Absturz
 - [ ] Git commit + Push
 
-**Erkenntnisse:**
-- FSBL RAM (AXISRAM2, 511 KB) reicht nicht fuer Frame Buffer (600 KB) + USBX Pool (128 KB). Loesung: `zephyr,memory-region = "AXISRAM34"` in Overlay, `__attribute__((section("AXISRAM34")))` im Code.
-- AXISRAM3 (0x34200000) und AXISRAM4 (0x34270000) sind physisch kontiguierlich — als 896 KB Combined-Region nutzbar.
+---
+
+## Phase ISO-4 — DCMIPP Integration (echte Kamera) ⏳
+
+**Ziel:** Echte Kamera-Frames statt DCMIPP-Simulation über USB streamen.
+
+**Offene Fragen:**
+- Thomas' DCMIPP Code-Stand? API-Grenzen definiert?
+- Bus Contention: AXI-Bandbreite reicht für USB + DCMIPP + Ethernet parallel?
+
+**Definition of Done:**
+- [ ] Sensor erkannt
+- [ ] Echtes Bild in UVC-Viewer (kein Rauschen, keine Artefakte)
+- [ ] Frame-Rate DCMIPP ≥ 30 FPS gemessen
+- [ ] CPU-Last < 50% (Zephyr Thread Analyzer)
+
+---
+
+## Phase ISO-5 — Integration + FPS Test + Produktisierung ⏳
+
+**Ziel:** Alle Messgrößen aus DoD erfüllt, stabil über 60 Minuten.
+
+| Messgröße | Ziel |
+|-----------|------|
+| USB Speed | HS (480 Mbit/s) |
+| UVC FPS | 30 FPS ± 1 |
+| Effektive Bandbreite | ~18 MB/s |
+| Drop Counter | < 1% über 5 Minuten |
+| ISO Incomplete Events | Minimal |
+| Reconnect-Stabilität | 10× ohne Absturz |
+| Heap-Stabilität | Kein Leak nach 60 Min |
+| CPU-Last | < 50% |

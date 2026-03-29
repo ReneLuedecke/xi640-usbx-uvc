@@ -342,6 +342,14 @@ ULONG tx_time_get(void)
     return (ULONG)k_uptime_ticks();
 }
 
+/* _ux_utility_time_get — von USBX Standalone als externes Symbol erwartet
+ * (ux_utility.h Zeile 169: wenn kein TX_API_H → extern ULONG _ux_utility_time_get)
+ * Wird in ux_utility_delay_ms.c aufgerufen. Einheit: UX_PERIODIC_RATE Ticks/s = ms. */
+ULONG _ux_utility_time_get(VOID)
+{
+    return (ULONG)k_uptime_get();
+}
+
 VOID tx_thread_relinquish(void)
 {
     k_yield();
@@ -350,17 +358,29 @@ VOID tx_thread_relinquish(void)
 /* -----------------------------------------------------------------------
  * _ux_utility_interrupt_disable / _ux_utility_interrupt_restore
  *
- * USBX ruft diese als externe C-Funktionen auf wenn TX_API_H nicht
- * definiert ist (d.h. kein ThreadX, nur Zephyr Port).
- * Mapping auf Zephyr irq_lock / irq_unlock (ISR-safe).
+ * DIAGNOSE-MODUS: Beide Funktionen sind NOPs.
+ *
+ * Hypothese: ux_system_tasks_run() wird aus dem USB-ISR aufgerufen
+ * (via usbx_device_cb → SOF-Callback). Wenn USBX intern interrupt_disable()
+ * aufruft und dabei PRIMASK=1 setzt, werden weitere USB-IRQs (Transfer-Complete,
+ * SETUP-Complete) blockiert — der Transfer haengt.
+ *
+ * Test: Mit NOPs laeuft tasks_run() ohne IRQ-Sperre. Wenn Enumeration damit
+ * funktioniert → PRIMASK-Masking war die Ursache.
+ * Produktions-Fix danach: BASEPRI-basierte Implementierung (sperrt nur
+ * niedrig-priorisierte IRQs, laesst USB-IRQ Prio 2 durch).
+ *
+ * ⚠ NICHT fuer Produktion — nur fuer Diagnosezwecke!
  * -------------------------------------------------------------------- */
 
 ALIGN_TYPE _ux_utility_interrupt_disable(VOID)
 {
-    return (ALIGN_TYPE)irq_lock();
+    /* NOP — kein IRQ-Masking fuer Diagnose */
+    return 0;
 }
 
 VOID _ux_utility_interrupt_restore(ALIGN_TYPE flags)
 {
-    irq_unlock((unsigned int)flags);
+    /* NOP — kein IRQ-Restore fuer Diagnose */
+    (void)flags;
 }

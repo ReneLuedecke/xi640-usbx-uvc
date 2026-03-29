@@ -226,7 +226,8 @@ static inline UINT tx_interrupt_control(UINT new_posture)
 #endif
 
 #ifndef UX_SLAVE_REQUEST_DATA_MAX_LENGTH
-#define UX_SLAVE_REQUEST_DATA_MAX_LENGTH        4096U
+/* ST Referenz: 1024 * USBL_PACKET_PER_MICRO_FRAME = 1024 * 3 = 3072 */
+#define UX_SLAVE_REQUEST_DATA_MAX_LENGTH        3072U
 #endif
 
 /* Memory-mapped IO (kein IO-Instructions Modus) */

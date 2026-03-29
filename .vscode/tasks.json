@@ -25,6 +25,50 @@
             "problemMatcher": ["$gcc"]
         },
         {
+            "label": "West Build (Diagnose: SW-Gen Colorbar)",
+            "type": "shell",
+            "command": "west",
+            "args": [
+                "build",
+                "-b", "stm32n6570_dk//fsbl",
+                "-d", "${workspaceFolder}/build/primary",
+                "-p", "always",
+                "${workspaceFolder}/app",
+                "--",
+                "'-DEXTRA_CONF_FILE=${workspaceFolder}/app/diag_swgen.conf'"
+            ],
+            "options": {
+                "cwd": "${config:zephyr.west.workspace}",
+                "env": {
+                    "ZEPHYR_BASE": "${config:zephyr.west.workspace}/zephyr"
+                }
+            },
+            "group": "build",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "West Build (Diagnose: SW-Gen Colorbar) [CMake Fallback]",
+            "type": "shell",
+            "command": "west",
+            "args": [
+                "build",
+                "-b", "stm32n6570_dk//fsbl",
+                "-d", "${workspaceFolder}/build/primary",
+                "-p", "always",
+                "${workspaceFolder}/app",
+                "--",
+                "-DXI640_DIAG_SWGEN=ON"
+            ],
+            "options": {
+                "cwd": "${config:zephyr.west.workspace}",
+                "env": {
+                    "ZEPHYR_BASE": "${config:zephyr.west.workspace}/zephyr"
+                }
+            },
+            "group": "build",
+            "problemMatcher": ["$gcc"]
+        },
+        {
             "label": "West Rebuild (Pristine)",
             "type": "shell",
             "command": "west",

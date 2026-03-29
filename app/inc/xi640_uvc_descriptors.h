@@ -2,13 +2,15 @@
  * @file    xi640_uvc_descriptors.h
  * @brief   USB/UVC Deskriptoren fuer Xi640 UVC Kamera
  *
- * Statische Deskriptor-Bloecke fuer ux_device_stack_initialize().
- * Format: USBX device_framework = Device Desc + Config Desc + Sub-Descs.
+ * Deskriptor-Bloecke fuer ux_device_stack_initialize().
+ * Werden durch xi640_uvc_descriptors_build() zur Laufzeit befuellt —
+ * exakt nach ST-Referenz (usb_desc.c + uvcl_desc.c, x-cube-n6-camera-capture).
  *
  * Unterstuetzte Konfiguration:
- *   - Video Class 1.1 (bcdUVC = 0x0110)
+ *   - Video Class 1.5 (bcdUVC = 0x0150)
  *   - Format: YUYV (uncompressed, 640x480 @ 30 FPS)
  *   - Endpoint: EP1 IN ISO High-Bandwidth (3x1024 = 3072 Bytes/Microframe)
+ *   - idVendor = 0x0483, idProduct = 0x5740 (ST UVC)
  *
  * Copyright (c) 2026 Optris GmbH. Alle Rechte vorbehalten.
  */
@@ -23,21 +25,35 @@ extern "C" {
 #endif
 
 /* ── HS Framework (Device Desc + Config + alle Sub-Descs) ────────────── */
-extern const uint8_t  xi640_uvc_hs_framework[];
-extern const uint32_t xi640_uvc_hs_framework_len;
+extern uint8_t  xi640_uvc_hs_framework[512];
+extern uint32_t xi640_uvc_hs_framework_len;
 
-/* ── FS Framework (identisch zu HS fuer Phase 5) ─────────────────────── */
-extern const uint8_t  xi640_uvc_fs_framework[];
-extern const uint32_t xi640_uvc_fs_framework_len;
+/* ── FS Framework ─────────────────────────────────────────────────────── */
+extern uint8_t  xi640_uvc_fs_framework[512];
+extern uint32_t xi640_uvc_fs_framework_len;
 
 /* ── String Framework ────────────────────────────────────────────────── */
 /* Format pro Eintrag: [lang_lo][lang_hi][string_index][len][chars...]   */
-extern const uint8_t  xi640_uvc_string_framework[];
-extern const uint32_t xi640_uvc_string_framework_len;
+extern uint8_t  xi640_uvc_string_framework[128];
+extern uint32_t xi640_uvc_string_framework_len;
 
 /* ── Language ID Framework ───────────────────────────────────────────── */
-extern const uint8_t  xi640_uvc_language_id_framework[];
-extern const uint32_t xi640_uvc_language_id_framework_len;
+extern uint8_t  xi640_uvc_language_id_framework[2];
+extern uint32_t xi640_uvc_language_id_framework_len;
+
+/**
+ * @brief Deskriptor-Puffer befuellen (ST-Referenz-Logik).
+ *
+ * Muss VOR ux_device_stack_initialize() aufgerufen werden.
+ * Generiert Serial-Nummer aus STM32 UID (HAL_GetUIDw0/1/2).
+ */
+void xi640_uvc_descriptors_build(void);
+
+/* ── Getter-Funktionen ───────────────────────────────────────────────── */
+const uint8_t *xi640_uvc_get_hs_framework(void);
+uint32_t       xi640_uvc_get_hs_framework_length(void);
+const uint8_t *xi640_uvc_get_fs_framework(void);
+uint32_t       xi640_uvc_get_fs_framework_length(void);
 
 #ifdef __cplusplus
 }

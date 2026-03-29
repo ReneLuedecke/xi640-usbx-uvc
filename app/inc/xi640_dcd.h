@@ -51,16 +51,18 @@ typedef enum {
 /* ──────────────────────────────────────────────────────────────────────── */
 
 /**
- * FIFO Konfiguration
+ * FIFO Konfiguration — ST Referenzwerte (x-cube-n6-camera-capture, uvcl.c Zeile 294-296)
  *
- * Gesamt: 4096 Words (16384 Bytes)
- * Belegung: 1024 + 512 + 2048 = 3584 Words (87.5%)
- * Frei: 512 Words fuer zukuenftige EPs
+ * Gesamt: 4096 Words verfuegbar
+ * ST-Belegung: 0x80 + 0x10 + 0x300 = 912 Words (22%)
+ *
+ * Kleinere FIFOs = weniger Buffer-Nutzung, aber mehr Interrupts.
+ * Fuer Enumeration ausreichend; fuer ISO Streaming ggf. anpassen.
  */
 #define XI640_DCD_FIFO_TOTAL_WORDS     4096U
-#define XI640_DCD_RX_FIFO_WORDS        1024U   /**< RX FIFO: 4096 Bytes */
-#define XI640_DCD_EP0_TX_FIFO_WORDS     512U   /**< EP0 TX: 2048 Bytes (Control) */
-#define XI640_DCD_EP1_TX_FIFO_WORDS    2048U   /**< EP1 TX: 8192 Bytes (ISO UVC) */
+#define XI640_DCD_RX_FIFO_WORDS        0x80U   /**< RX FIFO:  128 Words (ST-Wert) */
+#define XI640_DCD_EP0_TX_FIFO_WORDS    0x10U   /**< EP0 TX:    16 Words (ST-Wert) */
+#define XI640_DCD_EP1_TX_FIFO_WORDS   0x300U   /**< EP1 TX:   768 Words (ST-Wert) */
 
 /**
  * DMA Konfiguration
@@ -171,6 +173,86 @@ xi640_dcd_status_t xi640_dcd_stop(void);
  */
 void *xi640_dcd_get_pcd_handle(void);
 
+/**
+ * @brief   Liest USB OTG Interrupt-Masken-Register aus.
+ *
+ * Kapselt den HAL-Typ USB_OTG_GlobalTypeDef / USB_OTG_DeviceTypeDef,
+ * damit main.c keinen direkten STM32-HAL-Include benoetigt.
+ *
+ * Zu pruefende Bits:
+ *   GINTMSK  Bit  4 (RXFLVLM = 0x00000010): SETUP-IRQ Enable
+ *   DOEPMSK  Bit  3 (STUPM   = 0x00000008): SETUP-Phase-Done Enable
+ *   DAINTMSK Bit 16 (OEPINT0 = 0x00010000): EP0 OUT Interrupt Enable
+ *
+ * @param   gintmsk   [out] Wert von USB1_OTG_HS->GINTMSK
+ * @param   doepmsk   [out] Wert von DOEPMSK
+ * @param   daintmsk  [out] Wert von DAINTMSK
+ * @note    NICHT im Hot Path aufrufen!
+ */
+void xi640_dcd_get_irq_masks(uint32_t *gintmsk, uint32_t *doepmsk, uint32_t *daintmsk);
+
+/**
+ * @brief   Liest rohe Bus-Statusregister (ungemaskiert).
+ *
+ * GINTSTS: alle aktuell gesetzten Interrupt-Flags (unabhaengig von GINTMSK).
+ * GOTGCTL: OTG Control/Status — BSVLD (Bit 19 = 0x80000) zeigt ob VBUS
+ *          vorhanden ist (d.h. Kabel an echtem USB-Host steckt).
+ *
+ * @param   gintsts  [out] Wert von USB1_OTG_HS->GINTSTS (raw)
+ * @param   gotgctl  [out] Wert von USB1_OTG_HS->GOTGCTL
+ * @note    NICHT im Hot Path aufrufen!
+ */
+void xi640_dcd_get_bus_regs(uint32_t *gintsts, uint32_t *gotgctl);
+
+/**
+ * @brief   Liest DCTL und PCGCCTL fuer Soft-Connect Diagnose.
+ *
+ * DCTL Bit 1 = SDIS (Soft Disconnect):
+ *   0 = Device verbunden (D+ Pull-up aktiv) — Soll nach HAL_PCD_Start!
+ *   1 = Soft Disconnect aktiv — Host sieht Device NICHT
+ *
+ * PCGCCTL Bits [1:0] = STOPCLK | GATECLK:
+ *   Beide muessen 0 sein — sonst ist PHY-Clock gesperrt → kein USB-Betrieb.
+ *
+ * @param   dctl     [out] DCTL Register (pruefe Bit 1 = SDIS = 0)
+ * @param   pcgcctl  [out] PCGCCTL Register (pruefe Bits [1:0] = 0)
+ * @note    NICHT im Hot Path aufrufen!
+ */
+void xi640_dcd_get_dctl_pcgcctl(uint32_t *dctl, uint32_t *pcgcctl);
+
+/**
+ * @brief   Liest AHB/Device-Konfigurationsregister.
+ *
+ * GAHBCFG Bit 0 (GINTMSK = Global Interrupt Enable) MUSS nach HAL_PCD_Start = 1 sein.
+ * Falls 0: USB-Core generiert keine Interrupts mehr (ENUMDNE stumm).
+ * DCFG Bits [1:0]: 00=HS konfiguriert, 01=FS-in-HS-PHY.
+ * GCCFG VBVALOVAL: 1 = VBUS Override aktiv (Sollwert bei vbus_sensing_enable=DISABLE).
+ *
+ * @param   gahbcfg  [out] GAHBCFG (pruefe Bit 0 = GINT)
+ * @param   dcfg     [out] DCFG (pruefe Bits [1:0] = DEVSPD)
+ * @param   gccfg    [out] GCCFG (pruefe VBVALOVAL und VBVALEXTOEN)
+ */
+void xi640_dcd_get_ahb_regs(uint32_t *gahbcfg, uint32_t *dcfg, uint32_t *gccfg);
+
+/**
+ * @brief   Liest EP0 OUT Interrupt-Register und DAINT.
+ *
+ * Kapselt DAINT und die DOEP*-Register fuer EP0 OUT Diagnostik.
+ * Relevante Bits in DOEPINT0:
+ *   Bit 3 (STUP  = 0x08): SETUP-Paket empfangen, aber noch nicht verarbeitet.
+ *                          Falls gesetzt bei STP=0: EP0 OUT IRQ kommt nicht durch.
+ *   Bit 0 (XFRC  = 0x01): Transfer Complete
+ *
+ * @param   daint      [out] DAINT — welche Endpoints aktive Interrupts haben
+ * @param   doepctl0   [out] DOEPCTL0 — EP0 OUT Steuerregister
+ * @param   doepint0   [out] DOEPINT0 — EP0 OUT Interrupt-Flags (raw, vor DOEPMSK)
+ * @param   doeptsiz0  [out] DOEPTSIZ0 — EP0 OUT Transfer-Groesse/Paket-Zaehler
+ * @note    NICHT im Hot Path aufrufen!
+ */
+void xi640_dcd_get_ep0_out_regs(uint32_t *daint, uint32_t *doepctl0,
+                                  uint32_t *doepint0, uint32_t *doeptsiz0,
+                                  uint32_t *doepdma0);
+
 /* ──────────────────────────────────────────────────────────────────────── */
 /*  Cache-Maintenance Wrapper                                              */
 /* ──────────────────────────────────────────────────────────────────────── */
@@ -209,6 +291,7 @@ typedef struct {
     uint32_t    dma_enabled;        /**< 1 wenn DMA aktiv */
     uint32_t    frame_number;       /**< Aktueller SOF Frame Number */
     uint32_t    iso_incomplete_cnt; /**< ISO IN Incomplete Events */
+    uint32_t    usb_irq_count;      /**< Gesamt-IRQ-Aufrufe seit Boot */
 } xi640_dcd_diag_t;
 
 /**

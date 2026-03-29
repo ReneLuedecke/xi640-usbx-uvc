@@ -1,0 +1,51 @@
+# Copyright The Zephyr Project Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+source "samples/subsys/usb/common/Kconfig.sample_usbd"
+
+menu "UVC specific configuration"
+
+config APP_VIDEO_MAX_RESOLUTIONS
+	int "Maximum number of advertised resolutions"
+	default 5
+	help
+	   Control the maximum number of resolution that will be advertised
+	   to the USB client in case of the video capture supports a range
+	   of resolutions.
+
+# Lokale UVC ISO Fork (usbd_uvc_iso.c) — Konfigurationsoptionen unabhaengig
+# von CONFIG_USBD_VIDEO_CLASS, da wir die eingebaute Klasse deaktivieren
+config USBD_VIDEO_MAX_FORMATS
+	int "Maximale Anzahl Format-Deskriptoren"
+	default 8
+
+config USBD_VIDEO_NUM_BUFS
+	int "Maximale Anzahl UVC Puffer"
+	default 8
+
+config USBD_VIDEO_MAX_FRMIVAL
+	int "Maximale Anzahl Frame-Intervalle pro Frame-Deskriptor"
+	default 4
+
+config USBD_VIDEO_LOG_LEVEL
+	int "Log-Level fuer UVC ISO (0=NONE 1=ERR 2=WRN 3=INF 4=DBG)"
+	default 2
+
+config VIDEO_BUFFER_POOL_SZ_MAX
+	int "Maximale Groesse eines einzelnen Video-Puffers in Bytes"
+	default 614400
+	help
+	  Maximale Puffergroesse pro Frame (640x480 YUYV = 614400 Bytes).
+	  Formate, die groesser sind, werden beim Hinzufuegen uebersprungen.
+
+config XI640_UVC_SOURCE_DCMIPP
+	bool "DCMIPP als UVC-Datenquelle"
+	default y
+	help
+	  y: DCMIPP liefert Frames an UVC (Produktionsmodus, HAL-Bypass).
+	  n: SW-Generator Colorbar an UVC (Diagnose — DCMIPP läuft aber liefert nicht an USB).
+	  Diagnose-Build: west build ... -- -DCONFIG_XI640_UVC_SOURCE_DCMIPP=n
+
+endmenu
+
+source "Kconfig.zephyr"

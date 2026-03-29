@@ -17,8 +17,10 @@
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usbd.h>
 #include <zephyr/drivers/video.h>
+#include <zephyr/video/video.h>          /* video_import_buffer */
 #include <zephyr/logging/log.h>
 #include <zephyr/usb/class/usbd_uvc.h>
+#include <zephyr/cache.h>
 
 #include "lynred_atto640d.h"
 
@@ -27,11 +29,22 @@
 
 LOG_MODULE_REGISTER(uvc_sample, LOG_LEVEL_INF);
 
+/* UVC TX-Buffer in AXISRAM3/4 — DWC2 DMA erreicht AXISRAM (AXI-Bus).
+ * PSRAM (0x90000000) war der Crash-Auslöser: DWC2 DMA kann XSPI-mapped PSRAM
+ * nicht lesen (RISAF für XSPI-Region fehlte für USB-DMA-Master-CID).
+ * AXISRAM3 (0x34200000, 512 KB) + AXISRAM4 (0x34280000, 512 KB) aktiviert im Overlay.
+ * buf0: 0x34200000..0x34296000 (614400 B, AXISRAM3+4)
+ * buf1: 0x34296000..0x3432C000 (614400 B, AXISRAM4+5) */
+#define UVC_AXISRAM_BUF0  0x34200000UL
+#define UVC_AXISRAM_BUF1  0x34296000UL
+/* Wrapper-Structs: nur .index und .type werden von video_enqueue() genutzt.
+ * video_import_buffer() trägt .buffer/.size in video_buf[idx] ein. */
+static struct video_buffer uvc_static_bufs[2];
 
 const static struct device *const uvc_dev = DEVICE_DT_GET(DT_NODELABEL(uvc));
 
-/* sw-generator: nur für uvc_set_video_dev() + Format-Advertisement nötig.
- * Wird NICHT für Streaming verwendet. */
+/* sw-generator: Format-Advertisement + optionaler Colorbar-Diagnose-Pfad.
+ * CONFIG_XI640_UVC_SOURCE_DCMIPP=n → sw-generator liefert echte Colorbar-Daten an UVC. */
 const static struct device *const video_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_camera));
 
 static struct video_caps video_caps = {.type = VIDEO_BUF_TYPE_OUTPUT};
@@ -48,7 +61,7 @@ static void bench_reset(uint32_t frame_size)
 	bench.frames   = 0;
 	bench.bytes    = 0;
 	bench.start_ms = k_uptime_get();
-	LOG_INF("Benchmark gestartet, Frame-Groesse: %u Bytes (DCMIPP-Quelle)",
+	LOG_INF("Benchmark gestartet, Frame-Groesse: %u Bytes",
 		frame_size);
 }
 
@@ -206,7 +219,6 @@ static int app_add_filtered_formats(void)
 int main(void)
 {
 	struct usbd_context *sample_usbd;
-	struct video_buffer *done_buf;
 	struct video_format fmt = {0};
 	struct video_frmival frmival = {0};
 	int ret;
@@ -232,52 +244,63 @@ int main(void)
 	RCC->APB5ENR |= RCC_APB5ENR_DCMIPPEN;
 	LOG_INF("DCMIPP: APB5EN + DCMIPPEN gesetzt (0x%08x)", RCC->APB5ENR);
 
-	/* RIFSC: DCMIPP DMA-Master + Peripheral-Slave → CID1 Secure+Priv */
+	/* RIFSC: DMA-Master CID-Konfiguration für alle aktiven DMA-Master.
+	 *
+	 * Ohne RIMC-Konfiguration hat ein DMA-Master CID_NONE und kann nur
+	 * auf RISAF-Regionen ohne CID-Filter zugreifen (z.B. AXISRAM1 Default).
+	 * AXISRAM3-6 sind nach RAMCFG-Aktivierung CID-geschützt → DMA Master
+	 * braucht CID1-Zuweisung um darauf zuzugreifen.
+	 *
+	 * DCMIPP (Index 9): Liest Pixel vom CPLD, schreibt nach AXISRAM1.
+	 * OTG1   (Index 4): USB OTG HS DMA liest UVC-Frame aus AXISRAM3/4.
+	 * OTG2   (Index 5): Zweiter OTG-Kanal (zur Sicherheit mitkonfiguriert). */
 	__HAL_RCC_RIFSC_CLK_ENABLE();
 	{
 		RIMC_MasterConfig_t rimc = { 0 };
 		rimc.MasterCID = RIF_CID_1;
 		rimc.SecPriv   = RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV;
+
 		HAL_RIF_RIMC_ConfigMasterAttributes(RIF_MASTER_INDEX_DCMIPP, &rimc);
 		HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_DCMIPP,
 						      RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_PRIV);
-	}
-	LOG_INF("DCMIPP RIFSC: CID1 Secure+Priv gesetzt");
 
-	/* DCMIPP IRQ48 Fix: ITNS[1] bit16 auf Secure zwingen + SCB_NS->VTOR korrigieren.
-	 * Bug: ITNS[1] bit16=1 (NonSecure) → Vektor liest aus SCB_NS->VTOR → Flash
-	 * (0x18005abc) → Hard Fault. Fix A: bit löschen. Fix B: NS-VTOR korrigieren. */
+		/* USB OTG DMA-Master: AXISRAM3/4 als UVC TX-Buffer erreichbar machen. */
+		HAL_RIF_RIMC_ConfigMasterAttributes(RIF_MASTER_INDEX_OTG1, &rimc);
+		HAL_RIF_RIMC_ConfigMasterAttributes(RIF_MASTER_INDEX_OTG2, &rimc);
+	}
+	LOG_INF("RIMC: DCMIPP + OTG1 + OTG2 → CID1 Secure+Priv gesetzt");
+
+	/* Security-Fix: ALLE IRQs auf Secure zwingen + VTOR_NS korrekt setzen.
+	 *
+	 * ROOT CAUSE des Hard Faults:
+	 *   USB OTG HS IRQ (ca. IRQ 77, ITNS[2] bit 13) war Non-Secure (ITNS-Bit gesetzt).
+	 *   Beim ersten USB-Interrupt nach Stream-Start:
+	 *     → CPU wechselt in Non-Secure Handler Mode
+	 *     → liest Vektortabelle aus VTOR_NS = 0x34180400 (Secure-Alias!)
+	 *     → Non-Secure CPU darf 0x34xxxxxx nicht lesen → Bus Fault → VECTTBL HardFault
+	 *
+	 * Fix A: ALLE ITNS-Register löschen → kein IRQ mehr Non-Secure.
+	 *   Zephyr läuft vollständig im Secure-Modus — Non-Secure IRQs sind unerwünscht.
+	 *
+	 * Fix B: VTOR_NS auf NS-Alias setzen (0x24xxxxxx statt 0x34xxxxxx).
+	 *   Bit 28 unterscheidet Secure- (0x3x) von Non-Secure-Alias (0x2x) auf STM32N6.
+	 *   Auch wenn kein IRQ mehr NS ist: VTOR_NS korrekt halten (Sicherheitsnetz). */
 	{
 		uint32_t vtor_s = SCB->VTOR;
+		unsigned int irq_key;
 
-		if (NVIC->ITNS[1] & (1U << 16)) {
-			LOG_WRN("ITNS bit16 gesetzt — korrigiere DCMIPP auf Secure");
-			irq_disable(48);
-			NVIC->ITNS[1] &= ~(1U << 16);
-			irq_enable(48);
+		/* Fix A: Alle 16 ITNS-Register löschen (deckt IRQ 0..511) */
+		irq_key = irq_lock();
+		for (int _i = 0; _i < (int)ARRAY_SIZE(NVIC->ITNS); _i++) {
+			NVIC->ITNS[_i] = 0U;
 		}
-		if (SCB_NS->VTOR != vtor_s) {
-			LOG_WRN("SCB_NS->VTOR falsch (0x%08x), korrigiere",
-				SCB_NS->VTOR);
-			SCB_NS->VTOR = vtor_s;
-		}
-		LOG_INF("DCMIPP IRQ: ITNS[1]=0x%08x VTOR_NS=0x%08x",
-			NVIC->ITNS[1], SCB_NS->VTOR);
-	}
+		irq_unlock(irq_key);
 
-	/* RISAF1: DCMIPP DMA → PSRAM (0x90000000) write access für CID1 */
-	{
-		RISAF_BaseRegionConfig_t risaf_cfg = { 0 };
+		/* Fix B: VTOR_NS = NS-Alias (0x34xxxxxx → 0x24xxxxxx, bit28 löschen) */
+		SCB_NS->VTOR = vtor_s & ~(1UL << 28);
 
-		risaf_cfg.Filtering      = RISAF_FILTER_ENABLE;
-		risaf_cfg.Secure         = RIF_ATTRIBUTE_SEC;
-		risaf_cfg.PrivWhitelist  = RIF_CID_1;
-		risaf_cfg.ReadWhitelist  = RIF_CID_1;
-		risaf_cfg.WriteWhitelist = RIF_CID_1;
-		risaf_cfg.StartAddress   = 0x00000000U;
-		risaf_cfg.EndAddress     = 0x01FFFFFFU;
-		HAL_RIF_RISAF_ConfigBaseRegion(RISAF1, RISAF_REGION_1, &risaf_cfg);
-		LOG_INF("RISAF1: CID1 PSRAM konfiguriert");
+		LOG_INF("Security-Fix: alle ITNS=0, VTOR_S=0x%08x VTOR_NS=0x%08x",
+			SCB->VTOR, SCB_NS->VTOR);
 	}
 
 	/* DCMIPP Parallel-Interface Init (HAL Bypass Modus) */
@@ -289,42 +312,35 @@ int main(void)
 	}
 	LOG_INF("DCMIPP: HAL-Bypass Streaming aktiv");
 
-	/* ---- Setup: video_dev (sw-generator) nur fuer Format-Advertisement ---- */
+	/* ---- USB: Format-Advertisement (sw-generator als Metadaten-Quelle) ---- */
 
 	if (!device_is_ready(video_dev)) {
 		LOG_ERR("video_dev %s nicht bereit", video_dev->name);
 		return -ENODEV;
 	}
-
 	ret = video_get_caps(video_dev, &video_caps);
 	if (ret != 0) {
 		LOG_ERR("video_get_caps fehlgeschlagen: %d", ret);
 		return ret;
 	}
-
-	/* Verknuepft uvc_dev mit video_dev fuer Descriptor-Generierung.
-	 * sw-generator liefert KEINE Frames — nur Metadaten fuer Setup. */
 	uvc_set_video_dev(uvc_dev, video_dev);
-
 	ret = app_add_filtered_formats();
 	if (ret != 0) {
 		return ret;
 	}
 
 	/* ---- USB Stack starten ---- */
-
 	sample_usbd = sample_usbd_init_device(NULL);
 	if (sample_usbd == NULL) {
 		return -ENODEV;
 	}
-
 	ret = usbd_enable(sample_usbd);
 	if (ret != 0) {
 		return ret;
 	}
 
+	/* ---- Warte auf Host Format-Auswahl ---- */
 	LOG_INF("Warte auf Host Format-Auswahl...");
-
 	while (true) {
 		fmt.type = VIDEO_BUF_TYPE_INPUT;
 		ret = video_get_format(uvc_dev, &fmt);
@@ -337,115 +353,220 @@ int main(void)
 		}
 		k_sleep(K_MSEC(10));
 	}
-
 	ret = video_get_frmival(uvc_dev, &frmival);
 	if (ret != 0) {
 		LOG_WRN("video_get_frmival fehlgeschlagen: %d", ret);
 	}
-
 	LOG_INF("Host gewaehlt: %s %ux%u @ %u/%u",
 		VIDEO_FOURCC_TO_STR(fmt.pixelformat), fmt.width, fmt.height,
 		frmival.denominator, frmival.numerator);
-	LOG_WRN("USB Speed: %u (0=FS 1=HS), MPS: %u",
-		usbd_bus_speed(sample_usbd),
-		(usbd_bus_speed(sample_usbd) == USBD_SPEED_HS) ? 512U : 64U);
+	LOG_WRN("USB Speed: %u (0=FS 1=HS)",
+		usbd_bus_speed(sample_usbd));
 
-	/* ---- Buffer-Allokation ---- */
+	/* ── Streaming-Loop: DCMIPP oder SW-Generator → UVC ──────────────────
+	 * CONFIG_XI640_UVC_SOURCE_DCMIPP=y (default): DCMIPP liefert Frames.
+	 * CONFIG_XI640_UVC_SOURCE_DCMIPP=n:           SW-Generator Colorbar.
+	 *   Diagnose-Build: west build ... -- -DCONFIG_XI640_UVC_SOURCE_DCMIPP=n */
 
-	const uint32_t frame_size = fmt.size;
-	const int buf_count = CONFIG_VIDEO_BUFFER_POOL_NUM_MAX;
+#if CONFIG_XI640_UVC_SOURCE_DCMIPP
+	/* ── DCMIPP → UVC (Produktionspfad) ────────────────────────────────
+	 * RIMC für OTG1+OTG2 in Security-Init gesetzt → DWC2 DMA hat CID1.
+	 * UVC TX Buffer in AXISRAM3/4 — DWC2 DMA + CPU nutzen denselben CID1. */
+	LOG_INF("=== DCMIPP→UVC Streaming ===");
 
-	LOG_INF("Alloziere %d Buffers a %u Bytes", buf_count, frame_size);
+	/* video_import_buffer() registriert externe AXISRAM-Adressen in video_buf[].
+	 * video_enqueue() benutzt &video_buf[buf->index], NICHT buf->buffer direkt.
+	 * Ohne import wäre video_buf[0].buffer = NULL → UVC-Treiber greift auf NULL zu. */
+	{
+		uint16_t idx;
 
-	struct video_buffer *bufs[CONFIG_VIDEO_BUFFER_POOL_NUM_MAX];
-
-	for (int i = 0; i < buf_count; i++) {
-		bufs[i] = video_buffer_aligned_alloc(frame_size, CONFIG_VIDEO_BUFFER_POOL_ALIGN,
-						     K_NO_WAIT);
-		if (bufs[i] == NULL) {
-			LOG_ERR("video_buffer_alloc[%d] fehlgeschlagen", i);
-			return -ENOMEM;
-		}
-		bufs[i]->bytesused = 0;
-		bufs[i]->type = VIDEO_BUF_TYPE_INPUT;
-	}
-
-	/* ── Buffer-Queue initial befüllen ─────────────────────────────────── */
-	bench_reset(frame_size);
-
-	for (int i = 0; i < buf_count; i++) {
-		/* Puffer initialisieren: YUYV Grau als Platzhalter */
-		memset(bufs[i]->buffer, 0x80, frame_size);
-		bufs[i]->bytesused = frame_size;
-		bufs[i]->type = VIDEO_BUF_TYPE_INPUT;
-		ret = video_enqueue(uvc_dev, bufs[i]);
+		ret = video_import_buffer((uint8_t *)UVC_AXISRAM_BUF0, fmt.size, &idx);
 		if (ret != 0) {
-			LOG_ERR("video_enqueue[%d] initial fehlgeschlagen: %d",
-				i, ret);
+			LOG_ERR("video_import_buffer[0] fehlgeschlagen: %d", ret);
 			return ret;
 		}
+		uvc_static_bufs[0].index = idx;
+		uvc_static_bufs[0].type  = VIDEO_BUF_TYPE_INPUT;
+		LOG_INF("AXISRAM BUF0 @ 0x%08x → video_buf[%u]",
+			UVC_AXISRAM_BUF0, idx);
+
+		ret = video_import_buffer((uint8_t *)UVC_AXISRAM_BUF1, fmt.size, &idx);
+		if (ret != 0) {
+			LOG_ERR("video_import_buffer[1] fehlgeschlagen: %d", ret);
+			return ret;
+		}
+		uvc_static_bufs[1].index = idx;
+		uvc_static_bufs[1].type  = VIDEO_BUF_TYPE_INPUT;
+		LOG_INF("AXISRAM BUF1 @ 0x%08x → video_buf[%u]",
+			UVC_AXISRAM_BUF1, idx);
 	}
 
-	/* ── DCMIPP Erster Frame — Sensor + Pipeline prüfen ────────────────── */
+	/* Initial-Enqueue: bytesused=0 (von video_import_buffer gesetzt).
+	 * UVC sendet leere Frames (nur Header) bis DCMIPP Daten liefert — safe. */
+	ret = video_enqueue(uvc_dev, &uvc_static_bufs[0]);
+	if (ret != 0) {
+		LOG_ERR("initial enqueue[0] fehlgeschlagen: %d", ret);
+		return ret;
+	}
+	ret = video_enqueue(uvc_dev, &uvc_static_bufs[1]);
+	if (ret != 0) {
+		LOG_ERR("initial enqueue[1] fehlgeschlagen: %d", ret);
+		return ret;
+	}
+	LOG_INF("DCMIPP→UVC: beide Buffer eingereiht — starte Loop");
+
 	{
-		uint8_t *test_data;
-		uint32_t test_size;
+		uint8_t            *frame_data;
+		uint32_t            frame_size;
+		uint32_t            frame_count = 0U;
+		struct video_buffer *done_buf;
 
-		LOG_INF("Warte auf ersten DCMIPP-Frame (max 2 s)...");
-		ret = dcmipp_capture_get_frame(&test_data, &test_size, 2000);
-		if (ret != 0) {
-			LOG_ERR("Kein DCMIPP-Frame nach 2 s (ret=%d) — "
-				"Sensor-Problem?", ret);
-		} else {
-			uint16_t *px = (uint16_t *)test_data;
+		while (true) {
+			ret = dcmipp_capture_get_frame(&frame_data, &frame_size,
+						       100);
+			if (ret == -ETIMEDOUT) {
+				k_sleep(K_MSEC(1));
+				continue;
+			}
+			if (ret != 0) {
+				LOG_ERR("DCMIPP Fehler: %d", ret);
+				break;
+			}
 
-			LOG_INF("DCMIPP OK: [0]=%u [1]=%u [2]=%u [3]=%u [4]=%u (14-Bit)",
-				px[0] & 0x3FFF, px[1] & 0x3FFF, px[2] & 0x3FFF,
-				px[3] & 0x3FFF, px[4] & 0x3FFF);
+			ret = video_dequeue(uvc_dev, &done_buf, K_NO_WAIT);
+			if (ret != 0) {
+				k_sleep(K_MSEC(1));
+				continue;
+			}
+
+			memcpy(done_buf->buffer, frame_data,
+			       MIN(frame_size, fmt.size));
+			sys_cache_data_flush_range(done_buf->buffer,
+						   MIN(frame_size, fmt.size));
+			done_buf->bytesused = fmt.size;
+			done_buf->type      = VIDEO_BUF_TYPE_INPUT;
+
+			frame_count++;
+			if (frame_count <= 5U || frame_count % 50U == 0U) {
+				LOG_INF("DCMIPP→UVC frame %u buf=%p",
+					frame_count, (void *)done_buf->buffer);
+			}
+			ret = video_enqueue(uvc_dev, done_buf);
+			if (ret != 0) {
+				LOG_ERR("video_enqueue fehlgeschlagen: %d", ret);
+				break;
+			}
+			bench_update(fmt.size);
 		}
 	}
 
-	/* ── DCMIPP → UVC Streaming-Loop ────────────────────────────────────── */
-	while (true) {
-		uint8_t *dcmipp_data;
-		uint32_t dcmipp_size;
+#else /* CONFIG_XI640_UVC_SOURCE_DCMIPP=n → SW-Generator Diagnose-Pfad */
 
-		/* 1. Warte auf DCMIPP-Frame (blockiert bis DMA fertig, max 100 ms) */
-		ret = dcmipp_capture_get_frame(&dcmipp_data, &dcmipp_size, 100);
-		if (ret == -ETIMEDOUT) {
-			LOG_WRN("DCMIPP Timeout — Sensor antwortet nicht");
-			k_sleep(K_MSEC(1));
-			continue;
-		}
+	/* ── SW-Generator Colorbar → UVC (Diagnose-Modus) ──────────────────
+	 * DCMIPP läuft im Hintergrund (Init lief durch), liefert aber nicht
+	 * an USB. SW-Generator Colorbar verifiziert die UVC-Pipeline isoliert.
+	 * Buffers kommen vom Zephyr Heap (AXISRAM1) — DWC2 DMA-Zugriff bekannt OK.
+	 *
+	 * Wenn dies crasht → P16-Änderungen haben UVC/Security kaputt gemacht.
+	 * Wenn dies läuft  → Problem liegt im DCMIPP→UVC Übergabe-Code. */
+	LOG_INF("=== SW-Generator Colorbar → UVC (Diagnose) ===");
+	LOG_INF("SW-Gen: video_dev=%p ready=%d fmt.size=%u",
+		(void *)video_dev, device_is_ready(video_dev), fmt.size);
+
+	{
+		struct video_buffer *swgen_bufs[2];
+		struct video_buffer *vbuf;
+		struct video_buffer *done_buf;
+		uint32_t             frame_count = 0U;
+		struct video_format  swgen_fmt   = fmt;
+
+		swgen_fmt.type = VIDEO_BUF_TYPE_OUTPUT;
+		LOG_INF("SW-Gen: video_set_format...");
+		ret = video_set_format(video_dev, &swgen_fmt);
 		if (ret != 0) {
-			LOG_ERR("DCMIPP Fehler: %d", ret);
-			break;
+			LOG_WRN("video_set_format(sw-gen) Fehler: %d", ret);
+		}
+		LOG_INF("SW-Gen: video_set_format ret=%d", ret);
+
+		for (int i = 0; i < 2; i++) {
+			LOG_INF("SW-Gen: alloc buf[%d] size=%u (K_NO_WAIT)...",
+				i, fmt.size);
+			/* K_NO_WAIT statt K_FOREVER — blockiert nicht bei Heap-Engpass */
+			swgen_bufs[i] = video_buffer_alloc(fmt.size, K_NO_WAIT);
+			if (!swgen_bufs[i]) {
+				LOG_ERR("video_buffer_alloc fehlgeschlagen (%d) — "
+					"Heap zu klein fuer %u Bytes?", i, fmt.size);
+				return -ENOMEM;
+			}
+			LOG_INF("SW-Gen: buf[%d] @ %p", i,
+				(void *)swgen_bufs[i]->buffer);
+			swgen_bufs[i]->type = VIDEO_BUF_TYPE_OUTPUT;
+			LOG_INF("SW-Gen: enqueue buf[%d]...", i);
+			ret = video_enqueue(video_dev, swgen_bufs[i]);
+			if (ret != 0) {
+				LOG_ERR("video_enqueue(sw-gen %d) Fehler: %d",
+					i, ret);
+				return ret;
+			}
+			LOG_INF("SW-Gen buf[%d] @ %p enqueued OK", i,
+				(void *)swgen_bufs[i]->buffer);
 		}
 
-		/* 2. UVC-Buffer holen (K_NO_WAIT: Frame droppen wenn USB zu langsam) */
-		ret = video_dequeue(uvc_dev, &done_buf, K_NO_WAIT);
+		LOG_INF("SW-Gen: starte stream (video_stream_start)...");
+		ret = video_stream_start(video_dev, VIDEO_BUF_TYPE_OUTPUT);
 		if (ret != 0) {
-			LOG_DBG("Frame gedroppt — kein UVC-Buffer frei");
-			continue;
+			LOG_ERR("video_stream_start(sw-gen) Fehler: %d", ret);
+			return ret;
 		}
+		LOG_INF("SW-Gen: stream gestartet, beginne Loop");
 
-		bench_update(frame_size);
+		while (true) {
+			/* 1. Colorbar-Frame holen */
+			LOG_DBG("SW-Gen: warte auf Frame von video_dev...");
+			ret = video_dequeue(video_dev, &vbuf, K_MSEC(200));
+			if (ret != 0) {
+				LOG_WRN("SW-Gen dequeue timeout (frame %u) ret=%d",
+					frame_count, ret);
+				continue;
+			}
 
-		/* 3. DCMIPP-Daten → UVC-Buffer kopieren (Option A: raw passthrough).
-		 * ATTO640D liefert 14-Bit in uint16_t — erscheint als verfärbtes Bild.
-		 * Für Graustufen-YUYV: Option B im Plan aktivieren. */
-		memcpy(done_buf->buffer, dcmipp_data,
-		       MIN(dcmipp_size, frame_size));
-		done_buf->bytesused = frame_size;
+			/* 2. Cache flush — CPU hat Colorbar erzeugt → DMA-lesbar */
+			sys_cache_data_flush_range(vbuf->buffer,
+						   vbuf->bytesused);
+			vbuf->type = VIDEO_BUF_TYPE_INPUT;
 
-		/* 4. Buffer zurück in USB-Queue */
-		done_buf->type = VIDEO_BUF_TYPE_INPUT;
-		ret = video_enqueue(uvc_dev, done_buf);
-		if (ret != 0) {
-			LOG_ERR("video_enqueue fehlgeschlagen: %d", ret);
-			break;
+			/* 3. An UVC übergeben */
+			LOG_DBG("SW-Gen: enqueue Frame an uvc_dev...");
+			ret = video_enqueue(uvc_dev, vbuf);
+			if (ret != 0) {
+				LOG_ERR("video_enqueue(uvc) Fehler: %d", ret);
+				break;
+			}
+			frame_count++;
+			if (frame_count <= 5U || frame_count % 30U == 0U) {
+				LOG_INF("SW-Gen→UVC frame %u buf=%p",
+					frame_count, (void *)vbuf->buffer);
+			}
+
+			/* 4. Fertig-Buffer von UVC zurückfordern */
+			LOG_DBG("SW-Gen: warte auf fertig-Buffer von uvc_dev...");
+			ret = video_dequeue(uvc_dev, &done_buf, K_MSEC(500));
+			if (ret != 0) {
+				LOG_WRN("UVC dequeue timeout (frame %u) ret=%d",
+					frame_count, ret);
+				continue;
+			}
+
+			/* 5. Buffer an sw-generator zurückgeben */
+			done_buf->type = VIDEO_BUF_TYPE_OUTPUT;
+			LOG_DBG("SW-Gen: gebe Buffer zurueck an video_dev...");
+			video_enqueue(video_dev, done_buf);
+
+			bench_update(fmt.size);
 		}
 	}
+
+#endif /* CONFIG_XI640_UVC_SOURCE_DCMIPP */
 
 	return 0;
 }
