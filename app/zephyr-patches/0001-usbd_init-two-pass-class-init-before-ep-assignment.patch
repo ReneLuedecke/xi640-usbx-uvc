@@ -1,0 +1,55 @@
+diff --git a/subsys/usb/device_next/usbd_init.c b/subsys/usb/device_next/usbd_init.c
+index 1d91ac6f455..5d5a79801c5 100644
+--- a/subsys/usb/device_next/usbd_init.c
++++ b/subsys/usb/device_next/usbd_init.c
+@@ -213,15 +213,25 @@ static int init_configuration(struct usbd_context *const uds_ctx,
+ 	uint8_t nif = 0;
+ 	int ret;
+ 
++	/*
++	 * Xi640-Fix: Klasse-Init ZUERST, dann EP-Zuweisung.
++	 *
++	 * Problem: uvc_add_format() wird vor usbd_init() aufgerufen und
++	 * überschreibt den if1_ep_hs-Platzhalter (Index 10) im HS-Deskriptor-Array
++	 * mit Format-/Frame-Deskriptoren. Erst uvc_init() (= usbd_class_init)
++	 * fügt den EP-Deskriptor am Ende des Arrays wieder ein.
++	 *
++	 * Mit der alten Reihenfolge (inst → init) läuft init_configuration_inst(UVC)
++	 * bevor uvc_init() den EP hinzufügt → config_ep_bm bekommt kein EP1-IN-Bit →
++	 * HID bekommt EP1 (0x81) statt EP2 (0x82) → Kollision → Host lehnt ab.
++	 *
++	 * Lösung: 2-Pass-Ansatz:
++	 *   Pass 1 – usbd_class_init(): finalisiert alle Deskriptor-Arrays
++	 *   Pass 2 – init_configuration_inst(): weist IFs und EPs korrekt zu
++	 */
++
++	/* Pass 1: Alle Klassen-Inits laufen lassen (Deskriptor-Arrays finalisieren). */
+ 	SYS_SLIST_FOR_EACH_CONTAINER(&cfg_nd->class_list, c_nd, node) {
+-
+-		ret = init_configuration_inst(uds_ctx, speed, c_nd,
+-					      &config_ep_bm, &nif);
+-		if (ret != 0) {
+-			LOG_ERR("Failed to assign endpoint addresses");
+-			return ret;
+-		}
+-
+ 		ret = usbd_class_init(c_nd->c_data);
+ 		if (ret != 0) {
+ 			LOG_ERR("Failed to initialize class instance");
+@@ -233,6 +243,16 @@ static int init_configuration(struct usbd_context *const uds_ctx,
+ 		cfg_len += usbd_class_desc_len(c_nd->c_data, speed);
+ 	}
+ 
++	/* Pass 2: Interface-Nummern und EP-Adressen zuweisen. */
++	SYS_SLIST_FOR_EACH_CONTAINER(&cfg_nd->class_list, c_nd, node) {
++		ret = init_configuration_inst(uds_ctx, speed, c_nd,
++					      &config_ep_bm, &nif);
++		if (ret != 0) {
++			LOG_ERR("Failed to assign endpoint addresses");
++			return ret;
++		}
++	}
++
+ 	/* Update wTotalLength and bNumInterfaces of configuration descriptor */
+ 	sys_put_le16(sizeof(struct usb_cfg_descriptor) + cfg_len,
+ 		     (uint8_t *)&cfg_desc->wTotalLength);

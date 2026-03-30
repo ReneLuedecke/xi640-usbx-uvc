@@ -1,0 +1,53 @@
+diff --git a/samples/subsys/usb/common/sample_usbd_init.c b/samples/subsys/usb/common/sample_usbd_init.c
+index 0f8bf4db843..7d0b021584d 100644
+--- a/samples/subsys/usb/common/sample_usbd_init.c
++++ b/samples/subsys/usb/common/sample_usbd_init.c
+@@ -14,8 +14,12 @@
+ LOG_MODULE_REGISTER(usbd_sample_config);
+ 
+ /* By default, do not register the USB DFU class DFU mode instance. */
++/* Xi640: "hid_0" hier blockieren — wird nach UVC manuell registriert.
++ * Ursache: Linker sortiert STRUCT_SECTION_ITERABLE alphabetisch:
++ * "hid_0" < "uvc_c_data_0" → HID bekommt sonst Interface 0 statt Interface 2. */
+ static const char *const blocklist[] = {
+ 	"dfu_dfu",
++	IF_ENABLED(CONFIG_USBD_HID_SUPPORT, ("hid_0",))
+ 	NULL,
+ };
+ 
+@@ -143,6 +147,17 @@ struct usbd_context *sample_usbd_setup_device(usbd_msg_cb_t msg_cb)
+ 			return NULL;
+ 		}
+ 
++		/* Xi640: HID nach UVC registrieren → Interface 2
++		 * (VideoControl=0, VideoStreaming=1, HID=2) */
++		IF_ENABLED(CONFIG_USBD_HID_SUPPORT, (
++			err = usbd_register_class(&sample_usbd, "hid_0",
++						  USBD_SPEED_HS, 1);
++			if (err) {
++				LOG_ERR("Failed to register HID to HS cfg");
++				return NULL;
++			}
++		))
++
+ 		sample_fix_code_triple(&sample_usbd, USBD_SPEED_HS);
+ 	}
+ 
+@@ -161,6 +176,17 @@ struct usbd_context *sample_usbd_setup_device(usbd_msg_cb_t msg_cb)
+ 		LOG_ERR("Failed to add register classes");
+ 		return NULL;
+ 	}
++
++	/* Xi640: HID nach UVC registrieren → Interface 2
++	 * (VideoControl=0, VideoStreaming=1, HID=2) */
++	IF_ENABLED(CONFIG_USBD_HID_SUPPORT, (
++		err = usbd_register_class(&sample_usbd, "hid_0",
++					  USBD_SPEED_FS, 1);
++		if (err) {
++			LOG_ERR("Failed to register HID to FS cfg");
++			return NULL;
++		}
++	))
+ 	/* doc functions register end */
+ 
+ 	sample_fix_code_triple(&sample_usbd, USBD_SPEED_FS);

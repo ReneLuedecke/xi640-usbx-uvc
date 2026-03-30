@@ -1,0 +1,21 @@
+diff --git a/subsys/usb/device_next/usbd_ch9.c b/subsys/usb/device_next/usbd_ch9.c
+index c31e406c275..8e58f7d9724 100644
+--- a/subsys/usb/device_next/usbd_ch9.c
++++ b/subsys/usb/device_next/usbd_ch9.c
+@@ -524,6 +524,16 @@ static int sreq_get_desc_cfg(struct usbd_context *const uds_ctx,
+ 		}
+ 	}
+ 
++	/* DIAGNOSE: Vollstaendigen Config Descriptor (>256 B) in zwei Teilen dumpen.
++	 * Erster Host-Request hat wLength=256 → zu kurz.
++	 * Zweiter Request hat wLength=wTotalLength → vollstaendig.
++	 * TEMPORAER — nach Root-Cause-Analyse entfernen. */
++	if (buf->len > 256U) {
++		LOG_INF("CFG_DESC vollst.: len=%u wLength=%u", buf->len, setup->wLength);
++		LOG_HEXDUMP_INF(buf->data, 256U, "CFG_DESC_1:");
++		LOG_HEXDUMP_INF(buf->data + 256U, buf->len - 256U, "CFG_DESC_2:");
++	}
++
+ 	if (buf->len > setup->wLength) {
+ 		net_buf_remove_mem(buf, buf->len - setup->wLength);
+ 	}
