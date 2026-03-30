@@ -1,29 +1,29 @@
 {
-    // ===== ANPASSEN: Pfade zu deiner Installation =====
-    "zephyr.west.workspace": "D:/Code/STM32/RLU_Expriemente/stm32-helium-demo/west_workspace_main",
-    "zephyr.sdk": "D:/opt/zephyr-sdk-0.17.4",
-    
+    // ===== Projektpfade (project_22) =====
+    "zephyr.west.workspace": "D:/Zephyr_Workbench/project_22",
+    "zephyr.sdk": "D:/opt/zephyr-sdk-1.0.0",
+
     // Board Konfiguration
     "zephyr.board": "stm32n6570_dk/stm32n657xx/fsbl",
-    
+
     // C/C++ Extension
-    "C_Cpp.default.compilerPath": "${config:zephyr.sdk}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc.exe",
-    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "C_Cpp.default.compilerPath": "${config:zephyr.sdk}/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc.exe",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/primary/compile_commands.json",
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
     "C_Cpp.intelliSenseEngine": "default",
-    
+
     // CMake
     "cmake.configureOnOpen": false,
     "cmake.enableAutomaticKitScan": false,
-    
-    // Cortex-Debug (J-Link)
-    "cortex-debug.gdbPath": "${config:zephyr.sdk}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe",
-    "cortex-debug.armToolchainPath": "${config:zephyr.sdk}/arm-zephyr-eabi/bin",
+
+    // Cortex-Debug (J-Link / ST-LINK)
+    "cortex-debug.gdbPath": "${config:zephyr.sdk}/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe",
+    "cortex-debug.armToolchainPath": "${config:zephyr.sdk}/gnu/arm-zephyr-eabi/bin",
     "cortex-debug.JLinkGDBServerPath": "C:/Program Files/SEGGER/JLink/JLinkGDBServerCL.exe",
-    
+
     // Terminal
     "terminal.integrated.defaultProfile.windows": "PowerShell",
-    
+
     // Files
     "files.associations": {
         "*.h": "c",

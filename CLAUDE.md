@@ -19,7 +19,7 @@ Xi640 ist Firmware für eine Optris Thermalkamera auf dem STM32N6570-DK (Cortex-
 | USB Treiber | Zephyr `udc_stm32.c` (HAL-PCD Wrapper, OTG HS1 @ 0x08040000) |
 | Build-Variante | `//fsbl` — Code in AXISRAM → SW-Breakpoints |
 | Zielformat | 640×480 YUYV @ 30 FPS = 18,43 MB/s |
-| Aktueller USB-Modus | **Bulk** (DCMIPP→UVC Zero-Copy @ **52 FPS** ✅, AMCap bestätigt) |
+| Aktueller USB-Modus | **Bulk + HID Composite** (UVC IF0+IF1 + HID IF2, 52 FPS ✅, AMCap + SimpleHIDWrite gleichzeitig) |
 | Ziel USB-Modus | **ISO High-Bandwidth** (3×1024 = 24,6 MB/s max — Fork `usbd_uvc_iso.c` bereit) |
 | Ethernet | RAW/RTSP parallel (54,5 MB/s bereits erreicht) |
 
@@ -127,6 +127,39 @@ Header: `#include <zephyr/video/video.h>` (nicht `<zephyr/drivers/video.h>`).
 - AXISRAM3/4 (0x34200000/0x34296000) wird nicht mehr als UVC-Buffer genutzt (1.2 MB frei)
 - NICHT in PSRAM — DMA-Master braucht RISAF-Konfiguration für XSPI-Region
 
+### USB Composite: UVC + HID (Vendor 0xFFA0) ✅
+
+**Deskriptor-Struktur (wTotalLength=345, bNumInterfaces=3):**
+```
+Configuration Descriptor
+├─ IAD (bFirstInterface=0, bInterfaceCount=2, Video)
+├─ Interface 0: Video Control  (Class 0x0E, SubClass 0x01)
+├─ Interface 1: Video Streaming + EP1 IN (0x81) Bulk MPS=512
+└─ Interface 2: HID (Class 0x03) + EP2 IN (0x82) Interrupt 64B + EP2 OUT (0x02) 40B
+```
+
+**HID Report Descriptor:** Usage Page 0xFFA0 (Vendor Defined).
+Input Report 64 Bytes, Output Report 40 Bytes. Identisch zum FX2LP Xi640.
+
+**HID Kommando-Protokoll (Output Report, 40 Bytes):**
+- Byte 0: Geräte-Klasse (0x34 = CYP)
+- Byte 1: Kommando-ID
+- Byte 2+: Parameter
+
+Wichtigste Kommandos:
+- `0x34 0x58 0x10 MSB LSB` → DAC_GFID setzen (ATTO640D Register 0x004B)
+- `0x34 0x58 0x12 MSB LSB` → DAC_GSK setzen (ATTO640D Register 0x004C)
+- `0x34 0x42` → FW-Version abfragen
+- `0x34 0x55 dir` → Flag/Shutter Richtung
+
+**Windows:** Erscheint als "USB-Verbundgerät" mit Children:
+- "Xi640 UVC Bulk" (Kamera, usbvideo.sys)
+- "HID-konformes Gerät" (hid.dll)
+
+**FIFO-Layout (nach Phase D Erweiterung):**
+- EP1 TX: 806 Words (3224 B, UVC Bulk — 6,3× MPS)
+- EP2 TX: 16 Words (64 B, HID Interrupt)
+
 ---
 
 ## Verzeichnisstruktur
@@ -153,11 +186,13 @@ xi640-workspace/
 │   ├── boards/
 │   │   └── stm32n6570_dk_stm32n657xx_fsbl.overlay  # AXISRAM3-6, PSRAM, USART10 (PB9/PD3), ATTO640D GPIOs/I2C/PWM
 │   ├── src/
-│   │   ├── main.c                    # AKTIV: Zephyr-native Bulk UVC + DCMIPP-Sim
+│   │   ├── main.c                    # AKTIV: Zephyr-native Bulk UVC + DCMIPP + HID
 │   │   ├── lynred_atto640d.c/.h      # AKTIV: Sensor-Init (aus Project 17)
+│   │   ├── xi640_hid.c               # AKTIV: HID Vendor 0xFFA0 (Kommando-Interface)
 │   │   ├── usbd_uvc_iso.c           # ISO Fork (modifiziert, noch nicht kompiliert)
 │   │   └── xi640_st_test.c/.h       # USBX-Ära — Dead Code (ST-ISR Klon, nicht kompiliert)
 │   ├── inc/
+│   │   ├── xi640_hid.h               # AKTIV: HID API (xi640_hid_init, xi640_hid_send_report)
 │   │   └── xi640_uvc_stream.h        # USBX-Ära — Dead Code, nicht kompiliert
 │   ├── usbx_zephyr_port/             # USBX-Ära — Dead Code, nicht kompiliert
 │   ├── tests/                        # Host-Tests (native_posix)
@@ -208,6 +243,37 @@ xi640-workspace/
 1. **Zephyr USB + USBX gleichzeitig** → Geisterbugs, IRQ-Konflikte (erlebt: CDC+UVC Konflikt)
 2. **ISO Buffer in PSRAM ohne Cache-Konzept** → "Läuft 10 Sekunden, dann tot"
 3. **Pipeline zu früh koppeln** → 5 Unbekannte gleichzeitig (mehrfach erlebt)
+
+### Zephyr USB Composite: Interface-Reihenfolge + EP-Allocator ⚠️
+
+**Problem 1 — Alphabetische Sortierung:**
+Zephyr `device_next` sortiert USB-Klassen via `STRUCT_SECTION_ITERABLE` / `SORT_BY_NAME`
+alphabetisch nach Instanz-Name in Linker-Sections.
+`hid_0` < `uvc_c_data_0` → HID bekommt Interface 0 **vor** UVC.
+
+**Fix:** HID in die Blocklist → `usbd_register_all_classes()` überspringt HID →
+manuell mit `usbd_register_class("hid_0", ...)` **nach** UVC registrieren.
+Siehe `zephyr/samples/subsys/usb/common/sample_usbd_init.c`.
+
+**Problem 2 — EP-Deskriptor-Lücke (Root Cause der mehrtägigen Debug-Session):**
+`uvc_add_format()` wird in `main.c` **vor** `usbd_init()` aufgerufen.
+Intern überschreibt `uvc_assign_desc()` den `if1_ep_hs`-Platzhalter an Index 10
+des UVC HS-Deskriptor-Arrays mit Format-/Frame-Deskriptoren.
+Wenn `init_configuration_inst(UVC)` danach in `usbd_init()` läuft, sieht es
+**keinen EP-Deskriptor** → `config_ep_bm` bekommt EP1-IN-Bit nie gesetzt.
+HID's `assign_ep_addr()` findet EP1-IN "frei" → EP-Kollision:
+UVC Bulk (0x81) + HID Interrupt (0x81) → Host lehnt Deskriptor ab.
+
+**Fix (angewendet in `usbd_init.c`):**
+Two-Pass `init_configuration()`:
+```
+Pass 1: Alle usbd_class_init() aufrufen  (uvc_init() fügt EP zurück ins Array)
+Pass 2: Alle init_configuration_inst()   (EP-Bitmap ist jetzt korrekt)
+```
+
+⚠️ **ACHTUNG:** Dieser Fix modifiziert `zephyr/subsys/usb/device_next/usbd_init.c`
+im Zephyr-Tree. Bei `west update` wird er überschrieben!
+Als Patch pflegen oder upstream reporten (Titel: "usbd: init: class init before EP assignment for composite").
 
 ---
 
@@ -287,6 +353,7 @@ Bulk HS:    512 × N        = max ~14 MB/s (unter Last) — daher ISO Ziel
 | **B** | **Zephyr Bulk Baseline + DCMIPP-Sim** | **✅ Abgeschlossen** | **2026-03** |
 | **C** | **DCMIPP→UVC echte Thermaldaten** | **✅ Abgeschlossen** | **2026-03-29** |
 | **D** | **52 FPS Zero-Copy (Phase 4+5)** | **✅ Abgeschlossen** | **2026-03-29** |
+| **E** | **UVC+HID Composite Device** | **✅ Abgeschlossen** | **2026-03-30** |
 | ISO-1 | ISO Fork aktivieren | ⏳ Optional | — |
 | ISO-2 | Hardware-Test: ISO Enumeration | ⏳ Offen | — |
 | ISO-3 | Hardware-Test: ISO Streaming (Colorbar) | ⏳ Offen | — |
@@ -339,6 +406,17 @@ Bulk HS:    512 × N        = max ~14 MB/s (unter Last) — daher ISO Ziel
 - Timing: nach USB-Enumeration, vor erstem Frame-Transfer (kein aktiver Transfer)
 - `udc_stm32.c` verwendet standardmäßig nur 128W TX FIFO — 2776B DRAM ungenutzt!
 - AMCap-Ergebnis: 52,06 FPS, 0 dropped frames, 0 ms Jitter
+
+**Phase E — UVC+HID Composite Device (2026-03-30):**
+- Root Cause 1: `STRUCT_SECTION_ITERABLE` sortiert alphabetisch → `hid_0 < uvc_c_data_0` → HID bekam IF0
+  Fix: HID in Blocklist → nach UVC manuell mit `usbd_register_class()` registrieren
+- Root Cause 2: `uvc_add_format()` vor `usbd_init()` überschreibt `if1_ep_hs`-Platzhalter →
+  `init_configuration_inst(UVC)` sieht keinen EP → `config_ep_bm` EP1-IN-Bit fehlt →
+  HID bekommt EP1 (0x81) → Kollision → Host lehnt Deskriptor ab
+  Fix: Two-Pass `init_configuration()` in `usbd_init.c` — erst alle `usbd_class_init()`, dann alle `init_configuration_inst()`
+- Ergebnis: bNumInterfaces=3, wTotalLength=345, UVC EP1 IN (0x81) + HID EP2 IN/OUT (0x82/0x02)
+- Windows: "USB-Verbundgerät" mit UVC (usbvideo.sys) + HID (hid.dll) — beide gleichzeitig aktiv
+- AMCap + SimpleHIDWrite: 52 FPS ohne Verlust durch HID-Interface
 
 **ISO Fork (Phase 3/4 — Code vorhanden, noch nicht aktiviert):**
 - `usbd_uvc_iso.c`: Fork von Zephyr `usbd_uvc.c` mit Alt 0 (kein EP) + Alt 1 (ISO EP `0x1400 = 3×1024`)
@@ -463,6 +541,7 @@ Bolometer-Sensor, integriert aus Project 17. Sourcen: `app/src/lynred_atto640d.c
 - **RIMC: ALLE DMA-Master konfigurieren** — Jeder DMA-Master der auf AXISRAM3-6 zugreift braucht `HAL_RIF_RIMC_ConfigMasterAttributes()` mit CID1 Secure+Priv. Ohne CID → AXI Bus Error → Hard Fault. Bekannte Master: DCMIPP (Index 3), OTG1 (Index 4), OTG2 (Index 5). Muss in `main()` VOR Peripherie-Nutzung gesetzt werden.
 - **Security: ALLE ITNS-Register löschen** — Nicht nur einzelne Register, sondern alle 16 (deckt IRQ 0..511): `for (int i = 0; i < ARRAY_SIZE(NVIC->ITNS); i++) NVIC->ITNS[i] = 0;`. VTOR_NS auf NS-Alias: `SCB_NS->VTOR = SCB->VTOR & ~(1UL << 28)` (0x34xxxxxx → 0x24xxxxxx). Ohne dies: USB-IRQ → CPU wechselt NS → VTOR_NS zeigt auf Secure-Adresse → Bus Fault.
 - **Kconfig Bool überschreiben** — `-DCONFIG_FOO=n` auf der west-Commandline überschreibt `default y` NICHT zuverlässig. Stattdessen `EXTRA_CONF_FILE` verwenden: `-- -DEXTRA_CONF_FILE=override.conf` mit `CONFIG_FOO=n` darin.
+- **Zephyr-Tree-Patches nach `west update` verloren** — Modifizierte Dateien in `zephyr/` werden bei `west update` überschrieben. Aktuell gepatchte Dateien: `zephyr/subsys/usb/device_next/usbd_init.c` (Two-Pass composite Fix), `zephyr/samples/subsys/usb/common/sample_usbd_init.c` (HID-Reihenfolge), `zephyr/subsys/usb/device_next/usbd_ch9.c` (Debug-Hexdump, kann entfernt werden). → Als Git-Patch sichern oder `west update` mit Vorsicht.
 
 ---
 

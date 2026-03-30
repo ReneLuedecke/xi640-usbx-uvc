@@ -9,7 +9,7 @@
             "type": "cortex-debug",
             "gdbTarget": "127.0.0.1:61234",
             "servertype": "external",
-            "gdbPath": "${config:zephyr.sdk}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe",
+            "gdbPath": "${config:zephyr.sdk}/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe",
             "runToEntryPoint": "main",
             "overrideLaunchCommands": [
                 "load"
@@ -24,7 +24,7 @@
             "type": "cortex-debug",
             "gdbTarget": "127.0.0.1:61234",
             "servertype": "external",
-            "gdbPath": "${config:zephyr.sdk}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe"
+            "gdbPath": "${config:zephyr.sdk}/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb.exe"
         },
         {
             "name": "Xi640 (J-Link Attach)",
@@ -36,8 +36,7 @@
             "device": "STM32N657X0",
             "interface": "swd",
             "runToEntryPoint": false,
-            "showDevDebugOutput": "parsed",
-            "svdFile": "${config:zephyr.west.workspace}/modules/hal/stm32/stm32cube/stm32n6xx/drivers/include/stm32n657xx.svd"
+            "showDevDebugOutput": "parsed"
         }
     ]
 }

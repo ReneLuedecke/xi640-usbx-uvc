@@ -23,6 +23,7 @@
 #include <zephyr/cache.h>
 
 #include "lynred_atto640d.h"
+#include "xi640_hid.h"
 
 #include <soc.h>              /* STM32N6 HAL: RIF, RCC, NVIC, SCB_NS */
 #include "dcmipp_capture.h"
@@ -329,6 +330,13 @@ int main(void)
 		return ret;
 	}
 
+	/* ---- HID Interface registrieren (vor USB-Stack-Start) ---- */
+	ret = xi640_hid_init();
+	if (ret != 0) {
+		LOG_ERR("xi640_hid_init fehlgeschlagen: %d", ret);
+		return ret;
+	}
+
 	/* ---- USB Stack starten ---- */
 	sample_usbd = sample_usbd_init_device(NULL);
 	if (sample_usbd == NULL) {
@@ -337,6 +345,29 @@ int main(void)
 	ret = usbd_enable(sample_usbd);
 	if (ret != 0) {
 		return ret;
+	}
+
+	/* ── DEBUG: USB-Register-Zustand nach usbd_enable() ─────────────────
+	 * Vergleich UVC-only vs UVC+HID: GINTMSK und DCFG müssen identisch sein.
+	 * DCFG[1:0] DSPD: 0=HS, 1=FS(extern PHY), 3=FS(intern PHY).
+	 * DCTL[1] RWUSIG, DCTL[2] SFTDISCON (0=connected, 1=soft-disconnect).
+	 * GINTMSK: welche Interrupts aktiv sind (WKUINT Bit17, USBSUSP Bit11).
+	 * TEMPORÄR — nach Root-Cause-Analyse entfernen. */
+	{
+		volatile uint32_t *gintmsk =
+			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x018U);
+		volatile uint32_t *gintsts =
+			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x014U);
+		volatile uint32_t *dcfg =
+			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1))
+					      + USB_OTG_DEVICE_BASE + 0x000U);
+		volatile uint32_t *dctl =
+			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1))
+					      + USB_OTG_DEVICE_BASE + 0x004U);
+
+		LOG_INF("USB-REG nach usbd_enable: GINTMSK=0x%08x GINTSTS=0x%08x"
+			" DCFG=0x%08x DCTL=0x%08x",
+			*gintmsk, *gintsts, *dcfg, *dctl);
 	}
 
 	/* ---- Warte auf Host Format-Auswahl ---- */
@@ -357,8 +388,13 @@ int main(void)
 	if (ret != 0) {
 		LOG_WRN("video_get_frmival fehlgeschlagen: %d", ret);
 	}
-	LOG_INF("Host gewaehlt: %s %ux%u @ %u/%u",
-		VIDEO_FOURCC_TO_STR(fmt.pixelformat), fmt.width, fmt.height,
+	/* printk statt LOG_INF: GCC 12 (SDK 0.17.4) kann VA_STACK_ALIGN(long double)
+	 * nicht als compile-time integer auswerten → BUILD_ASSERT schlaegt fehl.
+	 * printk nutzt runtime-cbvprintf, kein static package → kein Assert. */
+	char fourcc_str[5];
+	memcpy(fourcc_str, VIDEO_FOURCC_TO_STR(fmt.pixelformat), sizeof(fourcc_str));
+	printk("Host gewaehlt: %s %ux%u @ %u/%u\n",
+		fourcc_str, fmt.width, fmt.height,
 		frmival.denominator, frmival.numerator);
 	LOG_WRN("USB Speed: %u (0=FS 1=HS)",
 		usbd_bus_speed(sample_usbd));
@@ -380,6 +416,8 @@ int main(void)
 			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x028U);
 		volatile uint32_t *dieptxf1  =
 			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x104U);
+		volatile uint32_t *dieptxf2  =
+			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x108U);
 		volatile uint32_t *grstctl   =
 			(volatile uint32_t *)(DT_REG_ADDR(DT_NODELABEL(usbotg_hs1)) + 0x010U);
 
@@ -396,16 +434,32 @@ int main(void)
 			4096U - total * 4U);
 
 		/* EP1 TX FIFO auf verfügbaren Rest ausweiten.
-		 * Flush zuerst: GRSTCTL.TXFNUM=1 (EP1), TXFFLSH=1 (bit5). */
+		 * 16W (64B = 1×HID-MPS) am Ende für EP2 HID TX FIFO reservieren.
+		 * Ohne diese Reservierung: EP1 (202-1023) überlagert EP2-FIFO (~330)
+		 * → Spurious resume / EP2-Korruption.
+		 * Flush EP1 zuerst: GRSTCTL.TXFNUM=1 (EP1), TXFFLSH=1 (bit5). */
 		*grstctl = (1UL << 6) | (1UL << 5);     /* TXFNUM=1, TXFFLSH=1 */
 		while (*grstctl & (1UL << 5)) {}         /* Warte bis auto-clear */
 
-		uint32_t ep1_new_depth = (4096U / 4U) - ep1_start;  /* 1024 - 202 = 822W */
+		/* EP1: Wörter ep1_start bis (1024-16-1) = 806W */
+		uint32_t ep2_fifo_words = 16U;           /* 64B = 1×HID-MPS */
+		uint32_t ep1_new_depth  = (4096U / 4U) - ep1_start - ep2_fifo_words;
 		*dieptxf1 = (ep1_new_depth << 16) | ep1_start;
 
 		LOG_INF("FIFO Tuning: EP1-TX %uW(%uB) → %uW(%uB) @ Word %u",
 			ep1_depth, ep1_depth * 4U,
 			ep1_new_depth, ep1_new_depth * 4U, ep1_start);
+
+		/* EP2 (HID): direkt nach EP1 platzieren.
+		 * Flush EP2 TX FIFO vor Reconfig. */
+		*grstctl = (2UL << 6) | (1UL << 5);     /* TXFNUM=2, TXFFLSH=1 */
+		while (*grstctl & (1UL << 5)) {}
+
+		uint32_t ep2_start = ep1_start + ep1_new_depth;
+		*dieptxf2 = (ep2_fifo_words << 16) | ep2_start;
+
+		LOG_INF("FIFO Tuning: EP2-TX %uW(%uB) @ Word %u (HID)",
+			ep2_fifo_words, ep2_fifo_words * 4U, ep2_start);
 	}
 
 	/* ── Streaming-Loop: DCMIPP oder SW-Generator → UVC ──────────────────

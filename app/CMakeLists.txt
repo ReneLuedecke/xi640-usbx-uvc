@@ -23,7 +23,10 @@ target_sources(app PRIVATE
     src/lynred_atto640d.c
     src/atto640d_video_stub.c
     src/dcmipp_capture.c
+    src/xi640_hid.c
 )
+
+target_include_directories(app PRIVATE inc)
 
 # DCMIPP Frame-Buffer in AXISRAM1 @ 0x34000000 (vor Zephyr Heap)
 zephyr_linker_sources(DATA_SECTIONS sections/dcmipp_buf.ld)
